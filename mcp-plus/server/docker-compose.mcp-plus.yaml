@@ -1,0 +1,21 @@
+# [mcp-plus] SAMPLE compose override — NOT applied. See README-PLUS.md, section "Swapping into docker-compose (later)".
+# Usage (later, when no production job is running):
+#   docker compose -p penpot -f ~/penpot/docker-compose.yaml -f ~/penpot/mcp-plus/server-fork/docker-compose.mcp-plus.yaml \
+#       up -d --no-deps penpot-mcp
+services:
+  penpot-mcp:
+    image: "penpot-mcp-plus:2.18-dev"
+    environment:
+      PENPOT_MCP_MAX_BODY: "5mb"
+      PENPOT_MCP_TOOL_TIMEOUT_S: "280"          # keep below the frontend nginx proxy_read_timeout (300 s)
+      PENPOT_MCP_HEARTBEAT_GRACE_S: "90"
+      PENPOT_MCP_TASK_QUEUE_MAX: "16"           # enables per-user FIFO (+ busy-is-alive)
+      PENPOT_MCP_ORPHAN_TASK_GRACE_S: "600"
+      PENPOT_MCP_CONNECTION_POLICY: "takeover-stale"
+      PENPOT_MCP_SESSION_TTL_S: "900"
+      PENPOT_MCP_MAX_SESSIONS: "100"
+      PENPOT_MCP_ENABLE_JOBS: "true"
+      PENPOT_MCP_JOB_TIMEOUT_S: "3600"
+      PENPOT_MCP_ENABLE_BATCH: "true"
+      PENPOT_MCP_ENABLE_STATS: "true"
+      PENPOT_MCP_PROGRESS_INTERVAL_S: "15"

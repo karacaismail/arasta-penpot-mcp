@@ -1,0 +1,1 @@
+let s = ''; process.stdin.on('data', (d) => (s += d)).on('end', () => { try { const r = JSON.parse(s).result; console.log(Array.isArray(r) ? r.join(' | ') : JSON.stringify(r)); } catch (e) { console.log(s.replace(/\s+/g, ' ').slice(0, 400)); } });

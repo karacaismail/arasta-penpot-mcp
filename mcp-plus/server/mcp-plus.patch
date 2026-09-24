@@ -1,0 +1,2324 @@
+diff --git a/mcp/packages/server/scripts/plus-defaults-test.mjs b/mcp/packages/server/scripts/plus-defaults-test.mjs
+new file mode 100644
+index 0000000..ae59068
+--- /dev/null
++++ b/mcp/packages/server/scripts/plus-defaults-test.mjs
+@@ -0,0 +1,24 @@
++import { spawn } from "node:child_process";
++import assert from "node:assert/strict";
++import { WebSocket } from "ws";
++import { Client } from "@modelcontextprotocol/sdk/client/index.js";
++import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
++const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
++const env={...process.env,PENPOT_MCP_SERVER_HOST:"127.0.0.1",PENPOT_MCP_SERVER_PORT:"4501",PENPOT_MCP_WEBSOCKET_PORT:"4502",PENPOT_MCP_REPL_PORT:"4503",PENPOT_MCP_LOG_LEVEL:"warn"};
++const s=spawn(process.execPath,["dist/index.js","--multi-user"],{env,stdio:["ignore","pipe","pipe"]});
++let out="";s.stdout.on("data",d=>out+=d);s.stderr.on("data",d=>out+=d);
++try{
++await sleep(1500);
++const c=new Client({name:"d",version:"1"});await c.connect(new StreamableHTTPClientTransport(new URL("http://127.0.0.1:4501/mcp?userToken=tok")));
++const tools=(await c.listTools()).tools.map(t=>t.name);
++assert.deepEqual(tools.sort(),["execute_code","export_shape","high_level_overview","penpot_api_info"]);
++console.log("default tools:",tools.join(","));
++const r=await fetch("http://127.0.0.1:4501/mcp?userToken=tok",{method:"POST",headers:{"content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping",params:{pad:"y".repeat(150000)}})});
++assert.equal(r.status,413);console.log("150KB body with default limit ->",r.status);
++const st=await fetch("http://127.0.0.1:4501/stats");assert.equal(st.status,404);console.log("/stats disabled by default ->",st.status);
++const a=new WebSocket("ws://127.0.0.1:4502/?userToken=tok");await new Promise(r=>a.once("open",r));
++const b=new WebSocket("ws://127.0.0.1:4502/?userToken=tok");const closed=await new Promise(r=>b.once("close",(code,reason)=>r([code,reason.toString()])));
++assert.equal(closed[0],1008);console.log("duplicate connection with default policy ->",closed.join(" "));
++assert.equal(a.readyState,1);a.close();
++console.log("DEFAULTS OK");
++}catch(e){console.error("FAIL",e,out);process.exitCode=1}finally{s.kill("SIGTERM");await new Promise(r=>s.once("exit",r));console.log("server stopped")}
+diff --git a/mcp/packages/server/scripts/plus-smoke-test.mjs b/mcp/packages/server/scripts/plus-smoke-test.mjs
+new file mode 100644
+index 0000000..01b0ac0
+--- /dev/null
++++ b/mcp/packages/server/scripts/plus-smoke-test.mjs
+@@ -0,0 +1,269 @@
++#!/usr/bin/env node
++/**
++ * [mcp-plus] smoke test: starts dist/index.js (multi-user) on 127.0.0.1:4501 (HTTP) / 4502 (plugin WS),
++ * connects a FAKE plugin over WebSocket and a real MCP SDK client over Streamable HTTP, exercises the
++ * new features, then stops the server.
++ *
++ * Usage (from packages/server, after `pnpm run build`):  node scripts/plus-smoke-test.mjs
++ *
++ * Fake plugin directives (first line of the code):  //SLEEP <ms>  (async wait, heartbeats continue)
++ *                                                    //BLOCK <ms>  (no heartbeats while "blocked")
++ *                                                    //FAIL        (plugin reports an error)
++ */
++import { spawn } from "node:child_process";
++import assert from "node:assert/strict";
++import { WebSocket } from "ws";
++import { Client } from "@modelcontextprotocol/sdk/client/index.js";
++import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
++
++const HTTP_PORT = Number(process.env.SMOKE_HTTP_PORT ?? 4501);
++const WS_PORT = Number(process.env.SMOKE_WS_PORT ?? 4502);
++const HOST = "127.0.0.1";
++const TOKEN = "smoke.TESTTOKEN123.x.y.z";
++const RESERVED = [9001, 1080, 4400, 4401, 4402, 4403];
++if (RESERVED.includes(HTTP_PORT) || RESERVED.includes(WS_PORT)) throw new Error("refusing to use a reserved port");
++
++const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
++const results = [];
++function ok(name, detail = "") {
++    results.push({ name, ok: true });
++    console.log(`  PASS  ${name}${detail ? "  -- " + detail : ""}`);
++}
++
++// ------------------------------------------------------------------ server
++const env = {
++    ...process.env,
++    PENPOT_MCP_SERVER_HOST: HOST,
++    PENPOT_MCP_SERVER_PORT: String(HTTP_PORT),
++    PENPOT_MCP_WEBSOCKET_PORT: String(WS_PORT),
++    PENPOT_MCP_REPL_PORT: "4503",
++    PENPOT_MCP_LOG_LEVEL: process.env.PENPOT_MCP_LOG_LEVEL ?? "warn",
++    PENPOT_MCP_MAX_BODY: "5mb",
++    PENPOT_MCP_TOOL_TIMEOUT_S: "4",
++    PENPOT_MCP_HEARTBEAT_GRACE_S: "2",
++    PENPOT_MCP_TASK_QUEUE_MAX: "8",
++    PENPOT_MCP_ORPHAN_TASK_GRACE_S: "30",
++    PENPOT_MCP_CONNECTION_POLICY: "takeover",
++    PENPOT_MCP_SESSION_TTL_S: "10",
++    PENPOT_MCP_SESSION_SWEEP_S: "3",
++    PENPOT_MCP_ENABLE_JOBS: "true",
++    PENPOT_MCP_JOB_TIMEOUT_S: "60",
++    PENPOT_MCP_ENABLE_BATCH: "true",
++    PENPOT_MCP_ENABLE_STATS: "true",
++};
++delete env.PENPOT_MCP_REDIS_URI;
++const server = spawn(process.execPath, ["dist/index.js", "--multi-user"], { env, stdio: ["ignore", "pipe", "pipe"] });
++let serverOut = "";
++server.stdout.on("data", (d) => (serverOut += d));
++server.stderr.on("data", (d) => (serverOut += d));
++
++async function stats() {
++    const r = await fetch(`http://${HOST}:${HTTP_PORT}/stats`);
++    return r.json();
++}
++
++// ------------------------------------------------------------------ fake plugin
++function fakePlugin(name) {
++    const ws = new WebSocket(`ws://${HOST}:${WS_PORT}/?userToken=${encodeURIComponent(TOKEN)}`);
++    const state = { name, ws, active: 0, maxActive: 0, received: 0, blockedUntil: 0, closed: null };
++    const hb = setInterval(() => {
++        if (ws.readyState === 1 && Date.now() >= state.blockedUntil) ws.send(JSON.stringify({ type: "heartbeat" }));
++    }, 500);
++    ws.on("close", (code, reason) => {
++        clearInterval(hb);
++        state.closed = { code, reason: reason.toString() };
++    });
++    ws.on("message", async (raw) => {
++        const req = JSON.parse(raw.toString());
++        state.received++;
++        state.active++;
++        state.maxActive = Math.max(state.maxActive, state.active);
++        const code = req.params?.code ?? "";
++        const m = /^\/\/(SLEEP|BLOCK|FAIL)\s*(\d+)?/.exec(code);
++        const ms = m?.[2] ? Number(m[2]) : 0;
++        if (m?.[1] === "BLOCK") state.blockedUntil = Date.now() + ms;
++        if (ms) await sleep(ms);
++        state.active--;
++        if (ws.readyState !== 1) return;
++        if (m?.[1] === "FAIL") {
++            ws.send(JSON.stringify({ id: req.id, success: false, error: "fake failure" }));
++        } else {
++            ws.send(JSON.stringify({ id: req.id, success: true, data: { result: { plugin: name, len: code.length }, log: "" } }));
++        }
++    });
++    state.ready = new Promise((res, rej) => {
++        ws.once("open", res);
++        ws.once("error", rej);
++    });
++    return state;
++}
++
++// ------------------------------------------------------------------ MCP client
++async function mcpClient() {
++    const client = new Client({ name: "plus-smoke", version: "1.0.0" });
++    const transport = new StreamableHTTPClientTransport(new URL(`http://${HOST}:${HTTP_PORT}/mcp?userToken=${encodeURIComponent(TOKEN)}`));
++    await client.connect(transport);
++    return { client, transport };
++}
++async function call(client, name, args = {}) {
++    const r = await client.callTool({ name, arguments: args }, undefined, { timeout: 90_000 });
++    return r.content[0].text;
++}
++const parse = (t) => JSON.parse(t);
++
++// ------------------------------------------------------------------ main
++let exitCode = 0;
++try {
++    // wait for server
++    for (let i = 0; ; i++) {
++        try {
++            await stats();
++            break;
++        } catch {
++            if (i > 100) throw new Error("server did not start:\n" + serverOut);
++            await sleep(100);
++        }
++    }
++    ok("server started", `http://${HOST}:${HTTP_PORT}, ws://${HOST}:${WS_PORT}`);
++
++    const p1 = fakePlugin("tab-1");
++    await p1.ready;
++    await sleep(200);
++
++    const { client, transport } = await mcpClient();
++
++    // 1. tools list
++    const tools = (await client.listTools()).tools.map((t) => t.name);
++    for (const t of ["execute_code", "submit_code", "job_status", "cancel_job", "batch_execute", "server_stats"]) {
++        assert.ok(tools.includes(t), `missing tool ${t}; got ${tools}`);
++    }
++    ok("tools/list contains new tools", tools.join(", "));
++
++    // 2. body limit: ~300 KB execute_code body (fails upstream with 100kb limit)
++    const big = "//" + "x".repeat(300_000);
++    const bigRes = parse(await call(client, "execute_code", { code: big }));
++    assert.equal(bigRes.result.len, big.length);
++    ok("execute_code with 300 KB body (PENPOT_MCP_MAX_BODY=5mb)");
++
++    // 2b. over-limit body -> JSON 413
++    const r413 = await fetch(`http://${HOST}:${HTTP_PORT}/mcp?userToken=x`, {
++        method: "POST",
++        headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
++        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", params: { pad: "y".repeat(6 * 1024 * 1024) } }),
++    });
++    const j413 = await r413.json();
++    assert.equal(r413.status, 413);
++    assert.match(j413.error.message, /PENPOT_MCP_MAX_BODY/);
++    ok("over-limit body answered with JSON-RPC 413", j413.error.message.slice(0, 60) + "...");
++
++    // 3. FIFO queue: concurrent calls are serialized per user
++    p1.maxActive = 0;
++    const conc = await Promise.all([1, 2, 3].map((i) => call(client, "execute_code", { code: `//SLEEP 600\n${i}` })));
++    assert.equal(conc.length, 3);
++    assert.equal(p1.maxActive, 1, "plugin saw concurrent tasks");
++    ok("3 concurrent execute_code calls serialized (max plugin concurrency 1)");
++
++    // 4. busy-is-alive: while a blocking task runs (no heartbeats > grace), a new call is queued, not rejected
++    const job1 = parse(await call(client, "submit_code", { code: "//BLOCK 3500\nheavy" }));
++    await sleep(3000); // heartbeat age now > 2 s grace
++    const t0 = Date.now();
++    const afterBlock = parse(await call(client, "execute_code", { code: "quick" }));
++    assert.equal(afterBlock.result.plugin, "tab-1");
++    ok("call during blocking task queued instead of 'suspended' error", `waited ${Date.now() - t0} ms`);
++
++    // 5. job lifecycle
++    const js1 = parse(await call(client, "job_status", { job_id: job1.jobId, wait_s: 10 }));
++    assert.equal(js1.state, "succeeded", JSON.stringify(js1));
++    assert.equal(js1.result.len, "//BLOCK 3500\nheavy".length);
++    ok("submit_code + job_status(wait_s) -> succeeded with result", `elapsed ${js1.elapsedS}s`);
++
++    // 5b. job longer than the synchronous tool timeout (4 s) succeeds
++    const longJob = parse(await call(client, "submit_code", { code: "//SLEEP 6000\nlong", timeout_s: 30 }));
++    const ljs = parse(await call(client, "job_status", { job_id: longJob.jobId, wait_s: 20 }));
++    assert.equal(ljs.state, "succeeded", JSON.stringify(ljs));
++    ok("job running 6 s > PENPOT_MCP_TOOL_TIMEOUT_S=4 succeeds");
++
++    // 5c. chunked job with failure
++    const cj = parse(await call(client, "submit_code", { chunks: ["a", "//FAIL", "c"], stop_on_error: true }));
++    const cjs = parse(await call(client, "job_status", { job_id: cj.jobId, wait_s: 10 }));
++    assert.equal(cjs.state, "failed");
++    assert.equal(cjs.results.length, 2);
++    ok("chunked job stops on error", `completed ${cjs.completedChunks}/${cjs.chunks}`);
++
++    // 5d. cancel a job whose task is still queued behind another one
++    const blocker = parse(await call(client, "submit_code", { code: "//SLEEP 2000\nblocker" }));
++    const victim = parse(await call(client, "submit_code", { code: "//SLEEP 100\nvictim" }));
++    await sleep(200);
++    const cancelled = parse(await call(client, "cancel_job", { job_id: victim.jobId }));
++    assert.equal(cancelled.state, "cancelled");
++    assert.equal(cancelled.cancelledTaskWas, "queued");
++    const bs = parse(await call(client, "job_status", { job_id: blocker.jobId, wait_s: 10 }));
++    assert.equal(bs.state, "succeeded");
++    ok("cancel_job drops a queued task before it reaches the plugin");
++
++    // 6. timeout -> orphan keeps lane busy -> next call waits for the late response instead of racing
++    const timedOut = await call(client, "execute_code", { code: "//SLEEP 5500\nslow" });
++    assert.match(timedOut, /timed out after 4 seconds/);
++    p1.maxActive = 0;
++    const next = parse(await call(client, "execute_code", { code: "after-timeout" }));
++    assert.equal(next.result.plugin, "tab-1");
++    assert.equal(p1.maxActive, 1);
++    ok("timed-out task orphaned; follow-up call dispatched after its late response");
++
++    // 7. batch_execute
++    const batch = parse(await call(client, "batch_execute", { chunks: ["one", "//SLEEP 200\ntwo", "three"] }));
++    assert.equal(batch.ok, true);
++    assert.equal(batch.results.length, 3);
++    ok("batch_execute runs 3 chunks in one round trip", `totalMs=${batch.totalMs}`);
++
++    // 8. server_stats tool
++    const st = parse(await call(client, "server_stats"));
++    assert.equal(st.plugins.connectedPlugins, 1);
++    assert.ok(st.plugins.recentTasks.length > 0);
++    assert.ok(!JSON.stringify(st).includes(TOKEN), "token leaked in stats");
++    ok("server_stats tool", `recentRunMs=${JSON.stringify(st.plugins.recentRunMs)}`);
++
++    // 9. takeover: a second tab for the same token replaces the first
++    const p2 = fakePlugin("tab-2");
++    await p2.ready;
++    await sleep(300);
++    assert.equal(p1.closed?.code, 1008, "old tab not closed");
++    const afterTakeover = parse(await call(client, "execute_code", { code: "who" }));
++    assert.equal(afterTakeover.result.plugin, "tab-2");
++    const st2 = await stats();
++    assert.equal(st2.plugins.takeovers, 1);
++    ok("PENPOT_MCP_CONNECTION_POLICY=takeover routes to newest tab", `old tab closed: ${p1.closed.reason}`);
++
++    // 10. session TTL: an abandoned session is removed
++    // (a live SDK client re-opens its GET stream and gets its session re-adopted, so simulate a client that
++    // vanished after initialize: raw initialize request, no GET stream, no DELETE)
++    const init = await fetch(`http://${HOST}:${HTTP_PORT}/mcp?userToken=${encodeURIComponent(TOKEN)}`, {
++        method: "POST",
++        headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
++        body: JSON.stringify({
++            jsonrpc: "2.0",
++            id: 1,
++            method: "initialize",
++            params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "ghost", version: "0" } },
++        }),
++    });
++    await init.text();
++    assert.ok(init.headers.get("mcp-session-id"));
++    const before = (await stats()).sessions.streamable;
++    await sleep(15_000);
++    const after = (await stats()).sessions.streamable;
++    assert.ok(after < before, `sessions before=${before} after=${after}`);
++    ok("idle sessions expire (PENPOT_MCP_SESSION_TTL_S=10)", `streamable sessions ${before} -> ${after}`);
++
++    await client.close().catch(() => {});
++    p2.ws.close();
++} catch (error) {
++    exitCode = 1;
++    console.error("FAIL:", error);
++    console.error("---- server output ----\n" + serverOut.slice(-4000));
++} finally {
++    server.kill("SIGTERM");
++    await new Promise((r) => server.once("exit", r));
++    console.log(`\n${results.length} checks passed; server stopped (exit ${server.exitCode ?? server.signalCode}).`);
++    process.exit(exitCode);
++}
+diff --git a/mcp/packages/server/src/JobManager.ts b/mcp/packages/server/src/JobManager.ts
+new file mode 100644
+index 0000000..1accdd8
+--- /dev/null
++++ b/mcp/packages/server/src/JobManager.ts
+@@ -0,0 +1,278 @@
++import { randomUUID } from "crypto";
++import type { PenpotMcpServer } from "./PenpotMcpServer";
++import { ExecuteCodePluginTask } from "./tasks/ExecuteCodePluginTask";
++import { createLogger } from "./logger";
++import { tokenFingerprint, type TaskState } from "./PluginBridge";
++import type { PlusConfig } from "./PlusConfig";
++
++/**
++ * [mcp-plus] Background execution of execute_code work ("jobs").
++ *
++ * A job is started by the `submit_code` tool and runs detached from the MCP request that created it,
++ * so it survives the client's HTTP request, proxy timeouts (nginx: 300 s) and client-side tool timeouts.
++ * Clients poll `job_status` (optionally long-polling via `wait_s`) and may `cancel_job`.
++ *
++ * Jobs live in memory only (lost on server restart).
++ */
++
++export type JobState = "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
++
++export interface ChunkResult {
++    index: number;
++    ok: boolean;
++    durationMs: number;
++    result?: unknown;
++    log?: string;
++    error?: string;
++}
++
++interface Job {
++    id: string;
++    userToken: string | undefined;
++    state: JobState;
++    createdAt: number;
++    finishedAt?: number;
++    timeoutSecs: number;
++    chunks: string[];
++    stopOnError: boolean;
++    results: ChunkResult[];
++    currentChunk: number;
++    currentTaskId?: string;
++    error?: string;
++    done: Promise<void>;
++    cancelRequested: boolean;
++}
++
++/**
++ * Runs a sequence of code chunks through the plugin bridge (shared by batch_execute and jobs).
++ *
++ * @param onTaskCreated - invoked with each task id before it is dispatched (for cancellation/status)
++ * @param shouldStop - checked before each chunk
++ * @param deadline - absolute deadline (ms since epoch) bounding every chunk's timeout; undefined = per-chunk tool timeout
++ */
++export async function runChunks(
++    mcpServer: PenpotMcpServer,
++    chunks: string[],
++    stopOnError: boolean,
++    results: ChunkResult[],
++    opts: {
++        onTaskCreated?: (taskId: string, index: number) => void;
++        shouldStop?: () => boolean;
++        deadline?: number;
++    } = {}
++): Promise<void> {
++    for (let i = 0; i < chunks.length; i++) {
++        if (opts.shouldStop?.()) {
++            return;
++        }
++        let timeoutSecs: number | undefined;
++        if (opts.deadline !== undefined) {
++            timeoutSecs = Math.max(1, Math.ceil((opts.deadline - Date.now()) / 1000));
++            if (opts.deadline <= Date.now()) {
++                throw new JobTimeoutError(`Job deadline reached before chunk ${i}`);
++            }
++        }
++        const task = new ExecuteCodePluginTask({ code: chunks[i] });
++        opts.onTaskCreated?.(task.id, i);
++        const start = Date.now();
++        try {
++            const res = await mcpServer.pluginBridge.executePluginTask(task, { timeoutSecs });
++            results.push({
++                index: i,
++                ok: true,
++                durationMs: Date.now() - start,
++                result: res.data?.result,
++                log: res.data?.log ? res.data.log : undefined,
++            });
++        } catch (error) {
++            const message = error instanceof Error ? error.message : String(error);
++            results.push({ index: i, ok: false, durationMs: Date.now() - start, error: message });
++            if (opts.deadline !== undefined && Date.now() >= opts.deadline - 250) {
++                throw new JobTimeoutError(message);
++            }
++            if (stopOnError) {
++                return;
++            }
++        }
++    }
++}
++
++export class JobTimeoutError extends Error {}
++
++export class JobManager {
++    private readonly logger = createLogger("JobManager");
++    private readonly jobs: Map<string, Job> = new Map();
++    private readonly sweepInterval: NodeJS.Timeout;
++
++    constructor(
++        private readonly mcpServer: PenpotMcpServer,
++        private readonly cfg: PlusConfig
++    ) {
++        this.sweepInterval = setInterval(() => this.sweep(), 60_000);
++        this.sweepInterval.unref();
++    }
++
++    /** Removes finished jobs older than the retention period. */
++    private sweep(): void {
++        const cutoff = Date.now() - this.cfg.jobRetentionSecs * 1000;
++        for (const [id, job] of this.jobs) {
++            if (job.finishedAt !== undefined && job.finishedAt < cutoff) {
++                this.jobs.delete(id);
++            }
++        }
++    }
++
++    public submit(
++        userToken: string | undefined,
++        chunks: string[],
++        stopOnError: boolean,
++        requestedTimeoutSecs?: number
++    ): Job {
++        this.sweep();
++        const active = [...this.jobs.values()].filter((j) => j.state === "running" && j.userToken === userToken);
++        if (active.length >= this.cfg.jobMaxActivePerUser) {
++            throw new Error(
++                `Too many unfinished jobs for this user (${active.length}; PENPOT_MCP_JOB_MAX_ACTIVE=${this.cfg.jobMaxActivePerUser}). ` +
++                    `Wait for or cancel existing jobs.`
++            );
++        }
++        const timeoutSecs = Math.min(
++            this.cfg.jobTimeoutSecs,
++            requestedTimeoutSecs && requestedTimeoutSecs > 0 ? requestedTimeoutSecs : this.cfg.jobTimeoutSecs
++        );
++        const job: Job = {
++            id: randomUUID(),
++            userToken,
++            state: "running",
++            createdAt: Date.now(),
++            timeoutSecs,
++            chunks,
++            stopOnError,
++            results: [],
++            currentChunk: -1,
++            cancelRequested: false,
++            done: Promise.resolve(),
++        };
++        this.jobs.set(job.id, job);
++        // run detached from the MCP request, but inside the submitting user's session context
++        job.done = this.mcpServer.runWithSessionContext({ userToken }, () => this.run(job));
++        this.logger.info(
++            `Job ${job.id} submitted (userFp=${tokenFingerprint(userToken)}, chunks=${chunks.length}, timeout=${timeoutSecs}s)`
++        );
++        return job;
++    }
++
++    private async run(job: Job): Promise<void> {
++        const deadline = job.createdAt + job.timeoutSecs * 1000;
++        try {
++            await runChunks(this.mcpServer, job.chunks, job.stopOnError, job.results, {
++                deadline,
++                shouldStop: () => job.cancelRequested,
++                onTaskCreated: (taskId, index) => {
++                    job.currentTaskId = taskId;
++                    job.currentChunk = index;
++                },
++            });
++            if (job.cancelRequested) {
++                job.state = "cancelled";
++            } else {
++                const failed = job.results.find((r) => !r.ok);
++                job.state = failed ? "failed" : "succeeded";
++                if (failed) job.error = failed.error;
++            }
++        } catch (error) {
++            const message = error instanceof Error ? error.message : String(error);
++            job.state = job.cancelRequested ? "cancelled" : error instanceof JobTimeoutError ? "timed_out" : "failed";
++            job.error = message;
++        } finally {
++            job.finishedAt = Date.now();
++            job.currentTaskId = undefined;
++            this.logger.info(`Job ${job.id} finished: ${job.state} in ${job.finishedAt - job.createdAt}ms`);
++        }
++    }
++
++    /** Looks up a job, enforcing ownership in multi-user mode. */
++    public get(jobId: string, userToken: string | undefined): Job {
++        const job = this.jobs.get(jobId);
++        if (!job || (this.mcpServer.isMultiUserMode() && job.userToken !== userToken)) {
++            throw new Error(`Unknown job id: ${jobId} (jobs are kept for ${this.cfg.jobRetentionSecs}s after finishing)`);
++        }
++        return job;
++    }
++
++    /** Waits up to `waitSecs` for the job to finish. */
++    public async wait(job: Job, waitSecs: number): Promise<void> {
++        const s = Math.min(Math.max(0, waitSecs), this.cfg.jobMaxWaitSecs);
++        if (s <= 0 || job.state !== "running") return;
++        let timer: NodeJS.Timeout | undefined;
++        await Promise.race([job.done, new Promise<void>((r) => (timer = setTimeout(r, s * 1000)))]);
++        if (timer) clearTimeout(timer);
++    }
++
++    public cancel(job: Job): { wasState: JobState; taskState: TaskState | null } {
++        const wasState = job.state;
++        if (job.state !== "running") {
++            return { wasState, taskState: null };
++        }
++        job.cancelRequested = true;
++        let taskState: TaskState | null = null;
++        if (job.currentTaskId) {
++            taskState = this.mcpServer.pluginBridge.cancelTask(job.currentTaskId, `Job ${job.id} cancelled`);
++        }
++        return { wasState, taskState };
++    }
++
++    public describe(job: Job, includeResults: boolean = true): Record<string, unknown> {
++        const now = Date.now();
++        const lastOk = [...job.results].reverse().find((r) => r.ok);
++        return {
++            jobId: job.id,
++            state: job.state,
++            elapsedS: Math.round(((job.finishedAt ?? now) - job.createdAt) / 100) / 10,
++            timeoutS: job.timeoutSecs,
++            chunks: job.chunks.length,
++            completedChunks: job.results.length,
++            currentChunk: job.state === "running" ? job.currentChunk : undefined,
++            currentTaskState:
++                job.state === "running" && job.currentTaskId
++                    ? this.mcpServer.pluginBridge.getTaskState(job.currentTaskId)
++                    : undefined,
++            error: job.error,
++            // single-chunk jobs: expose result/log directly (mirrors execute_code)
++            ...(includeResults && job.chunks.length === 1 && job.results.length === 1
++                ? job.results[0].ok
++                    ? { result: job.results[0].result, log: job.results[0].log }
++                    : {}
++                : {}),
++            ...(includeResults && job.chunks.length > 1 ? { results: job.results } : {}),
++            ...(job.chunks.length > 1 && lastOk ? { lastSuccessfulChunk: lastOk.index } : {}),
++            note:
++                job.state === "cancelled" || job.state === "timed_out"
++                    ? "Code already dispatched to the plugin cannot be interrupted server-side; it may still complete in the browser."
++                    : undefined,
++        };
++    }
++
++    public getStats(onlyToken?: string): Record<string, unknown> {
++        const counts: Record<string, number> = {};
++        const running: Record<string, unknown>[] = [];
++        for (const job of this.jobs.values()) {
++            if (onlyToken !== undefined && job.userToken !== onlyToken) continue;
++            counts[job.state] = (counts[job.state] ?? 0) + 1;
++            if (job.state === "running") {
++                running.push({
++                    jobId: job.id,
++                    userFp: tokenFingerprint(job.userToken),
++                    elapsedS: Math.round((Date.now() - job.createdAt) / 1000),
++                    chunk: `${job.currentChunk + 1}/${job.chunks.length}`,
++                    taskState: job.currentTaskId ? this.mcpServer.pluginBridge.getTaskState(job.currentTaskId) : null,
++                });
++            }
++        }
++        return { counts, running };
++    }
++
++    public close(): void {
++        clearInterval(this.sweepInterval);
++    }
++}
+diff --git a/mcp/packages/server/src/PenpotMcpServer.ts b/mcp/packages/server/src/PenpotMcpServer.ts
+index 4691c05..bd251c9 100644
+--- a/mcp/packages/server/src/PenpotMcpServer.ts
++++ b/mcp/packages/server/src/PenpotMcpServer.ts
+@@ -20,6 +20,15 @@ import { ReadTaigaIssueTool } from "./tools/ReadTaigaIssueTool";
+ import { NreplClient } from "./NreplClient";
+ import { ReplServer } from "./ReplServer";
+ import { ApiDocs } from "./ApiDocs";
++import { loadPlusConfig, type PlusConfig } from "./PlusConfig";
++import { JobManager } from "./JobManager";
++import {
++    BatchExecuteTool,
++    CancelJobTool,
++    JobStatusTool,
++    ServerStatsTool,
++    SubmitCodeTool,
++} from "./tools/PlusTools";
+ 
+ /**
+  * Session context for request-scoped data.
+@@ -32,6 +41,9 @@ export interface SessionContext {
+  * Represents an active Streamable HTTP session, grouping the transport, MCP server, and session metadata.
+  */
+ class StreamableSession {
++    /** [mcp-plus] number of non-GET requests currently being handled (e.g. running tool calls) */
++    public activeRequests = 0;
++
+     constructor(
+         public readonly transport: StreamableHTTPServerTransport,
+         public readonly userToken: string | undefined,
+@@ -70,6 +82,7 @@ export function shouldStartReplServer(isReplEnabled: boolean, isMultiUserMode: b
+ export class PenpotMcpServer {
+     /**
+      * Timeout, in minutes, for idle sessions (Streamable HTTP and SSE) before they are automatically closed and removed.
++     * [mcp-plus] default only; overridable via PENPOT_MCP_SESSION_TTL_S.
+      */
+     private static readonly SESSION_TIMEOUT_MINUTES = 60;
+ 
+@@ -110,7 +123,7 @@ export class PenpotMcpServer {
+      * @param token - the token to fingerprint, or `undefined`
+      * @returns a short fingerprint, or `<none>` if no token was given
+      */
+-    private static tokenFingerprint(token: string | undefined): string {
++    public static tokenFingerprint(token: string | undefined): string {
+         if (!token) {
+             return "<none>";
+         }
+@@ -120,6 +133,13 @@ export class PenpotMcpServer {
+     }
+ 
+     private readonly logger = createLogger("PenpotMcpServer");
++    /** [mcp-plus] extension configuration (see README-PLUS.md) */
++    public readonly plusConfig: PlusConfig;
++    /** [mcp-plus] effective plugin task timeout for synchronous tools (PENPOT_MCP_TOOL_TIMEOUT_S) */
++    public readonly toolTimeoutSecs: number;
++    /** [mcp-plus] background job manager (only when PENPOT_MCP_ENABLE_JOBS=true) */
++    public readonly jobManager?: JobManager;
++    private readonly startedAt = Date.now();
+     private readonly tools: ToolInfo[];
+     public readonly configLoader: ConfigurationLoader;
+     private app: any;
+@@ -170,7 +190,13 @@ export class PenpotMcpServer {
+         this.replHost = process.env.PENPOT_MCP_REPL_HOST ?? "localhost";
+         this.replPort = parseInt(process.env.PENPOT_MCP_REPL_PORT ?? "4403", 10);
+         this.tenant = process.env.PENPOT_TENANT ?? "default";
+-        const toolTimeoutSecs = parseInt(process.env.PENPOT_MCP_TOOL_TIMEOUT_S ?? "120", 10);
++        // [mcp-plus] validated (an invalid value previously produced NaN => immediate task timeouts)
++        this.plusConfig = loadPlusConfig();
++        this.toolTimeoutSecs = this.plusConfig.toolTimeoutSecs;
++        const toolTimeoutSecs = this.toolTimeoutSecs;
++        if (this.plusConfig.enableJobs) {
++            this.jobManager = new JobManager(this, this.plusConfig);
++        }
+ 
+         this.configLoader = new ConfigurationLoader(process.cwd());
+         this.apiDocs = new ApiDocs();
+@@ -191,7 +217,13 @@ export class PenpotMcpServer {
+             this.redisBridge = new RedisBridge(redisUri, this.tenant);
+         }
+ 
+-        this.pluginBridge = new PluginBridge(this, this.webSocketPort, toolTimeoutSecs, this.redisBridge);
++        this.pluginBridge = new PluginBridge(
++            this,
++            this.webSocketPort,
++            toolTimeoutSecs,
++            this.redisBridge,
++            this.plusConfig
++        );
+ 
+         if (shouldStartReplServer(PenpotMcpServer.isReplEnabled(process.env), this.isMultiUserMode())) {
+             this.replServer = new ReplServer(this.pluginBridge, this.replPort, this.replHost);
+@@ -269,6 +301,39 @@ export class PenpotMcpServer {
+         return this.sessionContext.getStore();
+     }
+ 
++    /**
++     * [mcp-plus] Runs the given function within the given session context (used by background jobs,
++     * which outlive the request that created them).
++     */
++    public runWithSessionContext<T>(context: SessionContext, fn: () => Promise<T>): Promise<T> {
++        return this.sessionContext.run(context, fn);
++    }
++
++    /**
++     * [mcp-plus] Returns a diagnostics snapshot (server_stats tool / GET /stats).
++     *
++     * @param onlyToken - restrict per-user details to this token (multi-user tool calls)
++     */
++    public getStats(onlyToken?: string): Record<string, unknown> {
++        const { maxBody, ...rest } = this.plusConfig;
++        return {
++            server: {
++                flavour: "mcp-plus",
++                uptimeS: Math.round((Date.now() - this.startedAt) / 1000),
++                multiUser: this.isMultiUserMode(),
++                redis: this.redisBridge !== undefined,
++                config: { maxBody, ...rest },
++            },
++            sessions: {
++                streamable: Object.keys(this.streamableTransports).length,
++                sse: Object.keys(this.sseTransports).length,
++                activeRequests: Object.values(this.streamableTransports).reduce((a, s) => a + s.activeRequests, 0),
++            },
++            plugins: this.pluginBridge.getStats(onlyToken),
++            jobs: this.jobManager ? this.jobManager.getStats(onlyToken) : "disabled (PENPOT_MCP_ENABLE_JOBS)",
++        };
++    }
++
+     private initTools(): ToolInfo[] {
+         const toolInstances: Tool<any>[] = [
+             new ExecuteCodeTool(this),
+@@ -288,6 +353,19 @@ export class PenpotMcpServer {
+             toolInstances.push(new ReadTaigaIssueTool(this));
+         }
+ 
++        // [mcp-plus] opt-in tools
++        if (this.jobManager) {
++            toolInstances.push(new SubmitCodeTool(this, this.jobManager, this.plusConfig));
++            toolInstances.push(new JobStatusTool(this, this.jobManager, this.plusConfig));
++            toolInstances.push(new CancelJobTool(this, this.jobManager));
++        }
++        if (this.plusConfig.enableBatch) {
++            toolInstances.push(new BatchExecuteTool(this, this.plusConfig));
++        }
++        if (this.plusConfig.enableStats) {
++            toolInstances.push(new ServerStatsTool(this));
++        }
++
+         return toolInstances.map((instance) => {
+             this.logger.info(`Registering tool: ${instance.getToolName()}`);
+             return new ToolInfo(instance, instance.getToolName(), {
+@@ -307,7 +385,9 @@ export class PenpotMcpServer {
+         );
+ 
+         for (const tool of this.tools) {
+-            server.registerTool(tool.name, tool.config, async (args: any) => tool.instance.execute(args));
++            server.registerTool(tool.name, tool.config, async (args: any, extra: any) =>
++                tool.instance.execute(args, extra)
++            );
+         }
+ 
+         return server;
+@@ -318,14 +398,20 @@ export class PenpotMcpServer {
+      * idle for longer than {@link SESSION_TIMEOUT_MINUTES}.
+      */
+     private startSessionTimeoutChecker(): void {
+-        const timeoutMs = PenpotMcpServer.SESSION_TIMEOUT_MINUTES * 60 * 1000;
+-        const checkIntervalMs = timeoutMs / 2;
++        // [mcp-plus] PENPOT_MCP_SESSION_TTL_S / PENPOT_MCP_SESSION_SWEEP_S (defaults: 60 min / 30 min, as upstream)
++        const timeoutMs = this.plusConfig.sessionTtlSecs * 1000;
++        const checkIntervalMs = this.plusConfig.sessionSweepSecs * 1000;
++        this.logger.info(
++            `Session idle TTL: ${this.plusConfig.sessionTtlSecs}s (sweep every ${this.plusConfig.sessionSweepSecs}s` +
++                `${this.plusConfig.maxSessions > 0 ? `, max ${this.plusConfig.maxSessions} sessions` : ""})`
++        );
+         this.sessionTimeoutInterval = setInterval(() => {
+-            this.logger.info("Checking for stale sessions...");
++            this.logger.debug("Checking for stale sessions...");
+             const now = Date.now();
+             let removed = 0;
+             for (const session of Object.values(this.streamableTransports)) {
+-                if (now - session.lastActiveTime > timeoutMs) {
++                // [mcp-plus] never expire a session while one of its tool calls is still running
++                if (session.activeRequests === 0 && now - session.lastActiveTime > timeoutMs) {
+                     session.transport.close();
+                     removed++;
+                 }
+@@ -338,12 +424,37 @@ export class PenpotMcpServer {
+                     removed++;
+                 }
+             }
++            const remaining = Object.keys(this.streamableTransports).length + Object.keys(this.sseTransports).length;
++            if (removed > 0) {
++                this.logger.info(`Removed ${removed} stale session(s); total sessions remaining: ${remaining}`);
++            } else {
++                this.logger.debug(`No stale sessions; total sessions: ${remaining}`);
++            }
++        }, checkIntervalMs);
++        this.sessionTimeoutInterval.unref?.();
++    }
++
++    /**
++     * [mcp-plus] Enforces PENPOT_MCP_MAX_SESSIONS by closing the least recently active idle
++     * Streamable HTTP sessions.
++     */
++    private enforceMaxSessions(): void {
++        const max = this.plusConfig.maxSessions;
++        if (max <= 0) return;
++        const sessions = Object.values(this.streamableTransports);
++        let excess = sessions.length - max;
++        if (excess <= 0) return;
++        const candidates = sessions
++            .filter((s) => s.activeRequests === 0)
++            .sort((a, b) => a.lastActiveTime - b.lastActiveTime);
++        for (const session of candidates) {
++            if (excess <= 0) break;
+             this.logger.info(
+-                `Removed ${removed} stale session(s); total sessions remaining: ${
+-                    Object.keys(this.streamableTransports).length + Object.keys(this.sseTransports).length
+-                }`
++                `Evicting least recently used session ${session.transport.sessionId} (PENPOT_MCP_MAX_SESSIONS=${max})`
+             );
+-        }, checkIntervalMs);
++            session.transport.close();
++            excess--;
++        }
+     }
+ 
+     private setupHttpEndpoints(): void {
+@@ -390,6 +501,7 @@ export class PenpotMcpServer {
+                         this.logger.info(
+                             `Session initialized with id=${id} for userTokenFp=${PenpotMcpServer.tokenFingerprint(userToken)}; total sessions: ${Object.keys(this.streamableTransports).length}`
+                         );
++                        this.enforceMaxSessions();
+                     },
+                 });
+ 
+@@ -419,6 +531,16 @@ export class PenpotMcpServer {
+                 await server.connect(transport);
+             }
+ 
++            // [mcp-plus] track running (non-GET) requests so that idle-session cleanup never kills a running call
++            const trackedSession = sessionId ? this.streamableTransports[sessionId] : undefined;
++            if (trackedSession && req.method !== "GET") {
++                trackedSession.activeRequests++;
++                res.on("close", () => {
++                    trackedSession.activeRequests = Math.max(0, trackedSession.activeRequests - 1);
++                    trackedSession.lastActiveTime = Date.now();
++                });
++            }
++
+             // handle the request
+             await this.sessionContext.run({ userToken }, async () => {
+                 await transport.handleRequest(req, res, req.body);
+@@ -465,10 +587,37 @@ export class PenpotMcpServer {
+     async start(): Promise<void> {
+         const { default: express } = await import("express");
+         this.app = express();
+-        this.app.use(express.json());
++        // [mcp-plus] PENPOT_MCP_MAX_BODY (default "100kb" = body-parser default, as upstream)
++        this.app.use(express.json({ limit: this.plusConfig.maxBody }));
+ 
+         this.setupHttpEndpoints();
+ 
++        // [mcp-plus] GET /stats (PENPOT_MCP_ENABLE_STATS); tokens are only exposed as fingerprints
++        if (this.plusConfig.enableStats) {
++            this.app.get("/stats", (_req: any, res: any) => {
++                res.json(this.getStats());
++            });
++        }
++
++        // [mcp-plus] turn oversized bodies into a JSON-RPC error that names the knob, instead of an HTML page
++        this.app.use((err: any, _req: any, res: any, next: any) => {
++            if (err?.type === "entity.too.large" || err?.status === 413) {
++                this.logger.warn(`Rejected request body of ${err.length ?? "?"} bytes (limit ${this.plusConfig.maxBody})`);
++                res.status(413).json({
++                    jsonrpc: "2.0",
++                    error: {
++                        code: -32600,
++                        message:
++                            `Request body too large (${err.length ?? "?"} bytes; limit ${this.plusConfig.maxBody}). ` +
++                            `Split the code into smaller calls or raise PENPOT_MCP_MAX_BODY on the server.`,
++                    },
++                    id: null,
++                });
++                return;
++            }
++            next(err);
++        });
++
+         return new Promise((resolve) => {
+             this.app.listen(this.port, this.host, async () => {
+                 this.logger.info(`Multi-user mode: ${this.isMultiUserMode()}`);
+@@ -480,6 +629,7 @@ export class PenpotMcpServer {
+                 this.logger.info(`Modern Streamable HTTP endpoint: http://${this.host}:${this.port}/mcp`);
+                 this.logger.info(`Legacy SSE endpoint: http://${this.host}:${this.port}/sse`);
+                 this.logger.info(`WebSocket server URL: ws://${this.host}:${this.webSocketPort}`);
++                this.logger.info(`[mcp-plus] configuration: ${JSON.stringify(this.plusConfig)}`);
+ 
+                 // start the REPL server (devenv only) and session timeout checker
+                 if (this.replServer) {
+@@ -506,6 +656,7 @@ export class PenpotMcpServer {
+     public async stop(): Promise<void> {
+         this.logger.info("Stopping Penpot MCP Server...");
+         clearInterval(this.sessionTimeoutInterval);
++        this.jobManager?.close();
+         await this.pluginBridge.close();
+         await this.redisBridge?.close();
+         if (this.replServer) {
+diff --git a/mcp/packages/server/src/PluginBridge.test.ts b/mcp/packages/server/src/PluginBridge.test.ts
+index b0d1593..9cc7ff6 100644
+--- a/mcp/packages/server/src/PluginBridge.test.ts
++++ b/mcp/packages/server/src/PluginBridge.test.ts
+@@ -1,6 +1,6 @@
+ import assert from "node:assert/strict";
+ import test from "node:test";
+-import { assertPluginResponsive, HEARTBEAT_STALE_THRESHOLD_MS } from "./PluginBridge";
++import { assertPluginResponsive, HEARTBEAT_STALE_THRESHOLD_MS, tokenFingerprint } from "./PluginBridge";
+ 
+ test("passes for a responsive connection with a recent heartbeat", () => {
+     const now = 1_000_000;
+@@ -43,3 +43,25 @@ test("honours a custom stale threshold", () => {
+         /appears to be suspended by the browser/
+     );
+ });
++
++// ── [mcp-plus] ─────────────────────────────────────────────────
++
++test("[mcp-plus] a busy connection is treated as alive despite a stale heartbeat", () => {
++    const now = 1_000_000;
++    const lastHeartbeat = now - 10 * HEARTBEAT_STALE_THRESHOLD_MS;
++    assert.doesNotThrow(() => assertPluginResponsive({ frozen: false, lastHeartbeat }, now, HEARTBEAT_STALE_THRESHOLD_MS, true));
++});
++
++test("[mcp-plus] a busy connection that reported a freeze is still rejected", () => {
++    const now = 1_000_000;
++    assert.throws(
++        () => assertPluginResponsive({ frozen: true, lastHeartbeat: now }, now, HEARTBEAT_STALE_THRESHOLD_MS, true),
++        /has been frozen/
++    );
++});
++
++test("[mcp-plus] tokenFingerprint uses the JWE CEK segment and never the whole token", () => {
++    assert.equal(tokenFingerprint("a.bcdefghijk.c.d.e"), "bcdefghi");
++    assert.equal(tokenFingerprint("plain-token-value"), "plain-to");
++    assert.equal(tokenFingerprint(undefined), "<none>");
++});
+diff --git a/mcp/packages/server/src/PluginBridge.ts b/mcp/packages/server/src/PluginBridge.ts
+index 305f5dc..e4f8d28 100644
+--- a/mcp/packages/server/src/PluginBridge.ts
++++ b/mcp/packages/server/src/PluginBridge.ts
+@@ -6,17 +6,26 @@ import { PluginTaskRequest, PluginTaskResponse, PluginTaskResult } from "@penpot
+ import { createLogger } from "./logger";
+ import type { PenpotMcpServer } from "./PenpotMcpServer";
+ import type { RedisBridge } from "./RedisBridge";
++import { loadPlusConfig, type PlusConfig } from "./PlusConfig";
+ 
+ const KEEP_ALIVE_TIME = 30000; // 30 seconds
+ 
+ /**
+- * Maximum plugin heartbeat age before a connection is stale.
++ * Maximum plugin heartbeat age before a connection is stale (upstream default).
+  *
+  * This uses plugin heartbeats rather than WebSocket pongs because the browser can answer
+  * protocol pings while the tab's JavaScript event loop is frozen.
++ *
++ * [mcp-plus] configurable at runtime via PENPOT_MCP_HEARTBEAT_GRACE_S.
+  */
+ export const HEARTBEAT_STALE_THRESHOLD_MS = 30000;
+ 
++/** [mcp-plus] lane key used for connections without a user token (single-user mode). */
++const SINGLE_USER_LANE = "__single_user__";
++
++/** [mcp-plus] number of recent task records kept for stats. */
++const RECENT_TASKS_MAX = 50;
++
+ /**
+  * Observable liveness state of a plugin connection.
+  */
+@@ -28,21 +37,66 @@ export interface PluginLivenessState {
+ }
+ 
+ interface ClientConnection extends PluginLivenessState {
++    /** [mcp-plus] numeric connection id (for stats / in-flight bookkeeping). */
++    id: number;
+     socket: WebSocket;
+     userToken: string | null;
+     pingInterval: NodeJS.Timeout;
++    /** [mcp-plus] connection time, in ms since epoch. */
++    connectedAt: number;
++}
++
++/** [mcp-plus] bookkeeping for a task handled on this instance's local plugin connection. */
++interface TaskMeta {
++    taskId: string;
++    taskName: string;
++    laneKey: string;
++    enqueuedAt: number;
++    sentAt?: number;
++    connectionId?: number;
++    /** set when the server-side timeout fired / the task was cancelled while the plugin still runs it */
++    orphan: boolean;
++    orphanTimer?: NodeJS.Timeout;
++    timeoutSecs: number;
++}
++
++/** [mcp-plus] per-user FIFO lane. */
++interface Lane {
++    key: string;
++    /** ids of tasks waiting for dispatch, FIFO */
++    queue: string[];
++    /** ids of tasks sent to the plugin and not answered yet (including orphans) */
++    inFlight: Set<string>;
++}
++
++/** [mcp-plus] record of a finished task for stats. */
++export interface RecentTaskRecord {
++    taskId: string;
++    taskName: string;
++    userFp: string;
++    queuedMs: number;
++    runMs: number | null;
++    outcome: "success" | "error" | "timeout" | "cancelled" | "late-response" | "superseded" | "orphan-expired";
++    finishedAt: string;
+ }
+ 
++export type TaskState = "queued" | "in_flight" | "orphaned" | "unknown";
++
+ /**
+  * Throws if the plugin tab cannot currently run tasks.
+  *
+  * A socket can stay open while the page event loop is paused, so task dispatch must check
+  * plugin-level liveness before sending work.
++ *
++ * @param busy - [mcp-plus] whether the connection currently has a task in flight and busy connections
++ *   are to be treated as alive (PENPOT_MCP_BUSY_IS_ALIVE); a plugin that is executing a long synchronous
++ *   task cannot emit heartbeats, which must not be mistaken for a suspended tab.
+  */
+ export function assertPluginResponsive(
+     state: PluginLivenessState,
+     now: number,
+-    staleThresholdMs: number = HEARTBEAT_STALE_THRESHOLD_MS
++    staleThresholdMs: number = HEARTBEAT_STALE_THRESHOLD_MS,
++    busy: boolean = false
+ ): void {
+     if (state.frozen) {
+         throw new Error(
+@@ -51,6 +105,10 @@ export function assertPluginResponsive(
+         );
+     }
+ 
++    if (busy) {
++        return;
++    }
++
+     const heartbeatAge = now - state.lastHeartbeat;
+     if (heartbeatAge > staleThresholdMs) {
+         throw new Error(
+@@ -61,6 +119,23 @@ export function assertPluginResponsive(
+     }
+ }
+ 
++/**
++ * Returns a short, non-reversible fingerprint of a user token (same scheme as PenpotMcpServer.tokenFingerprint).
++ */
++export function tokenFingerprint(token: string | null | undefined): string {
++    if (!token || token === SINGLE_USER_LANE) {
++        return "<none>";
++    }
++    const segments = token.split(".");
++    const source = segments.length === 5 ? segments[1] : token;
++    return source.slice(0, 8);
++}
++
++export interface ExecutePluginTaskOptions {
++    /** [mcp-plus] overrides the task timeout (seconds); defaults to PENPOT_MCP_TOOL_TIMEOUT_S */
++    timeoutSecs?: number;
++}
++
+ /**
+  * Manages WebSocket connections to Penpot plugin instances and handles plugin tasks
+  * over these connections.
+@@ -76,28 +151,49 @@ export class PluginBridge {
+     private readonly pendingTasks: Map<string, AbstractPluginTask<any, any>> = new Map();
+     private readonly taskTimeouts: Map<string, NodeJS.Timeout> = new Map();
+ 
++    /** [mcp-plus] state */
++    private readonly plus: PlusConfig;
++    private readonly lanes: Map<string, Lane> = new Map();
++    private readonly taskMeta: Map<string, TaskMeta> = new Map();
++    private readonly recentTasks: RecentTaskRecord[] = [];
++    private connectionCounter = 0;
++    private takeoverCount = 0;
++    private rejectedDuplicateCount = 0;
++
+     /**
+      * Creates the plugin bridge and starts its WebSocket server.
+      *
+      * @param mcpServer - The owning MCP server
+      * @param port - The port on which to listen for plugin WebSocket connections
++     * @param taskTimeoutSecs - Timeout, in seconds, for plugin task execution
+      * @param redisBridge - Optional Redis bridge enabling multi-instance task routing.
+      *   When provided, tasks handled by this instance are routed to the instance
+      *   holding the relevant plugin's WebSocket connection (which may be this same
+      *   instance) via Redis, rather than dispatched directly over a local socket.
+-     * @param taskTimeoutSecs - Timeout, in seconds, for plugin task execution
+-     *   (defaults to {@link DEFAULT_TASK_TIMEOUT_SECS})
++     * @param plusConfig - [mcp-plus] extension configuration (defaults to the environment)
+      */
+     constructor(
+         public readonly mcpServer: PenpotMcpServer,
+         private port: number,
+         private readonly taskTimeoutSecs: number,
+-        private readonly redisBridge?: RedisBridge
++        private readonly redisBridge?: RedisBridge,
++        plusConfig?: PlusConfig
+     ) {
++        this.plus = plusConfig ?? loadPlusConfig();
+         this.wsServer = new WebSocketServer({ port: port, host: mcpServer.host });
+         this.setupWebSocketHandlers();
+     }
+ 
++    /** [mcp-plus] heartbeat staleness threshold in ms */
++    private get heartbeatGraceMs(): number {
++        return this.plus.heartbeatGraceSecs * 1000;
++    }
++
++    /** [mcp-plus] whether per-user FIFO queueing is enabled */
++    private get queueEnabled(): boolean {
++        return this.plus.taskQueueMax > 0;
++    }
++
+     /**
+      * Sets up WebSocket connection handlers for plugin communication.
+      *
+@@ -129,28 +225,46 @@ export class PluginBridge {
+             }, KEEP_ALIVE_TIME);
+ 
+             // register the client connection with both indexes
++            const now = Date.now();
+             const connection: ClientConnection = {
++                id: ++this.connectionCounter,
+                 socket: ws,
+                 userToken,
+                 pingInterval,
+-                lastHeartbeat: Date.now(),
++                lastHeartbeat: now,
+                 frozen: false,
++                connectedAt: now,
+             };
+             this.connectedClients.set(ws, connection);
+             if (userToken) {
+-                // ensure only one connection per userToken
+-                if (this.clientsByToken.has(userToken)) {
+-                    this.logger.warn("Duplicate connection for given user token; rejecting new connection");
+-                    this.removeConnection(ws);
+-                    ws.close(1008, "Duplicate connection for given user token; close previous connection first.");
+-                    return;
++                const existing = this.clientsByToken.get(userToken);
++                let tookOver = false;
++                if (existing) {
++                    // [mcp-plus] PENPOT_MCP_CONNECTION_POLICY (default "reject" = upstream behaviour)
++                    if (this.shouldTakeOver(existing)) {
++                        this.takeOver(existing, connection);
++                        tookOver = true;
++                    } else {
++                        // ensure only one connection per userToken
++                        this.rejectedDuplicateCount++;
++                        this.logger.warn(
++                            "Duplicate connection for given user token; rejecting new connection (policy=%s, userFp=%s)",
++                            this.plus.connectionPolicy,
++                            tokenFingerprint(userToken)
++                        );
++                        this.removeConnection(ws);
++                        ws.close(1008, "Duplicate connection for given user token; close previous connection first.");
++                        return;
++                    }
+                 }
+ 
+                 this.clientsByToken.set(userToken, connection);
+ 
+                 // In multi-instance mode, subscribe to this token's Redis request channel so
+                 // that task requests issued by other instances are dispatched to this plugin.
+-                if (this.redisBridge) {
++                // ([mcp-plus] on takeover, the subscription made for the previous connection is kept;
++                // its handler resolves the connection by token at dispatch time.)
++                if (this.redisBridge && !tookOver) {
+                     const tokenForSubscription = userToken;
+                     this.redisBridge
+                         .subscribeToTasks(userToken, (request) =>
+@@ -191,11 +305,86 @@ export class PluginBridge {
+                 this.logger.error(error, "WebSocket connection error");
+                 this.removeConnection(ws);
+             });
++
++            // [mcp-plus] a (re)connected plugin may unblock queued work
++            if (this.queueEnabled) {
++                this.pumpLane(this.getLane(userToken ?? SINGLE_USER_LANE));
++            }
+         });
+ 
+         this.logger.info("WebSocket mcpServer started on port %d", this.port);
+     }
+ 
++    /**
++     * [mcp-plus] Decides, based on PENPOT_MCP_CONNECTION_POLICY, whether a new connection for an
++     * already-registered user token replaces the existing one.
++     */
++    private shouldTakeOver(existing: ClientConnection): boolean {
++        switch (this.plus.connectionPolicy) {
++            case "takeover":
++                return true;
++            case "takeover-stale":
++                return !this.isConnectionHealthy(existing);
++            default:
++                return false;
++        }
++    }
++
++    /** [mcp-plus] whether a connection is open, not frozen and (heartbeat-fresh or busy-and-alive). */
++    private isConnectionHealthy(connection: ClientConnection): boolean {
++        if (connection.socket.readyState !== WebSocket.OPEN) {
++            return false;
++        }
++        try {
++            const lane = this.lanes.get(connection.userToken ?? SINGLE_USER_LANE);
++            const busy = this.plus.busyIsAlive && lane !== undefined && lane.inFlight.size > 0;
++            assertPluginResponsive(connection, Date.now(), this.heartbeatGraceMs, busy);
++            return true;
++        } catch {
++            return false;
++        }
++    }
++
++    /**
++     * [mcp-plus] Replaces `oldConn` by `newConn` for their shared user token: closes the old socket and
++     * fails the tasks that were in flight on it (the old tab can no longer deliver their results).
++     */
++    private takeOver(oldConn: ClientConnection, newConn: ClientConnection): void {
++        const token = oldConn.userToken!;
++        this.takeoverCount++;
++        this.logger.warn(
++            "Duplicate connection for given user token; taking over (policy=%s, userFp=%s, oldConn=#%d, newConn=#%d)",
++            this.plus.connectionPolicy,
++            tokenFingerprint(token),
++            oldConn.id,
++            newConn.id
++        );
++        // transfer token ownership first, so that removeConnection() of the old socket skips token cleanup
++        this.clientsByToken.set(token, newConn);
++        this.removeConnection(oldConn.socket);
++        try {
++            oldConn.socket.close(1008, "Superseded by a newer connection for the same user token.");
++        } catch (error) {
++            this.logger.debug("Error closing superseded socket: %s", error);
++        }
++
++        const lane = this.lanes.get(token);
++        if (lane) {
++            for (const taskId of [...lane.inFlight]) {
++                const meta = this.taskMeta.get(taskId);
++                if (meta?.connectionId === oldConn.id) {
++                    const error = new Error(
++                        `Task ${taskId} aborted: the plugin connection executing it was superseded by a newer ` +
++                            `connection for the same user (PENPOT_MCP_CONNECTION_POLICY=${this.plus.connectionPolicy}).`
++                    );
++                    this.rejectPendingTask(taskId, error, "superseded");
++                    // the old tab cannot report back anymore: release the lane immediately
++                    this.finishInFlight(taskId, "superseded");
++                }
++            }
++        }
++    }
++
+     /**
+      * Removes a client connection and releases all resources associated with it.
+      *
+@@ -227,6 +416,15 @@ export class PluginBridge {
+                         .catch((error) => this.logger.error(error, "Failed to unsubscribe from Redis task channel"));
+                 }
+             }
++        } else if (this.connectedClients.size === 1 && this.queueEnabled) {
++            // [mcp-plus] single-user mode: removing a surplus connection may make dispatch possible again
++            this.pumpLane(this.getLane(SINGLE_USER_LANE));
++        }
++        // [mcp-plus] drop idle lanes that no longer have a connection
++        const laneKey = connection.userToken ?? SINGLE_USER_LANE;
++        const lane = this.lanes.get(laneKey);
++        if (lane && lane.queue.length === 0 && lane.inFlight.size === 0 && !this.resolveLaneConnection(laneKey)) {
++            this.lanes.delete(laneKey);
+         }
+     }
+ 
+@@ -241,6 +439,12 @@ export class PluginBridge {
+     private handlePluginTaskResponse(response: PluginTaskResponse<any>): void {
+         const task = this.pendingTasks.get(response.id);
+         if (!task) {
++            // [mcp-plus] a late response for an orphaned (timed-out/cancelled) task frees its lane
++            if (this.taskMeta.has(response.id)) {
++                this.logger.info(`Received late response for orphaned task ${response.id}; releasing its lane`);
++                this.finishInFlight(response.id, "late-response");
++                return;
++            }
+             this.logger.info(`Received response for unknown task ID: ${response.id}`);
+             return;
+         }
+@@ -262,6 +466,9 @@ export class PluginBridge {
+         }
+ 
+         this.logger.info(`Task ${response.id} completed: success=${response.success}`);
++
++        // [mcp-plus] lane bookkeeping (no-op for tasks not dispatched locally)
++        this.finishInFlight(response.id, response.success ? "success" : "error");
+     }
+ 
+     /**
+@@ -271,11 +478,20 @@ export class PluginBridge {
+      * index before rejecting its promise. Safe to call for a task that has already been
+      * settled (e.g. by a response or a timeout), in which case nothing happens.
+      *
++     * [mcp-plus] A task still waiting in its lane queue is removed from the queue; a task already
++     * sent to the plugin becomes an "orphan" that keeps the lane busy until the plugin answers or
++     * PENPOT_MCP_ORPHAN_TASK_GRACE_S elapses (the plugin cannot be interrupted server-side).
++     *
+      * @param taskId - The ID of the task to reject
+      * @param error - The error with which to reject the task
++     * @param outcome - [mcp-plus] outcome recorded for stats
+      * @returns Whether the task was still pending and has been rejected
+      */
+-    private rejectPendingTask(taskId: string, error: Error): boolean {
++    private rejectPendingTask(
++        taskId: string,
++        error: Error,
++        outcome: RecentTaskRecord["outcome"] = "error"
++    ): boolean {
+         const pendingTask = this.pendingTasks.get(taskId);
+         if (!pendingTask) {
+             return false;
+@@ -288,6 +504,27 @@ export class PluginBridge {
+         }
+         this.pendingTasks.delete(taskId);
+ 
++        // [mcp-plus] lane bookkeeping
++        const meta = this.taskMeta.get(taskId);
++        if (meta) {
++            const lane = this.lanes.get(meta.laneKey);
++            const queueIndex = lane ? lane.queue.indexOf(taskId) : -1;
++            if (lane && queueIndex >= 0) {
++                // never dispatched: drop it entirely
++                lane.queue.splice(queueIndex, 1);
++                this.recordFinished(meta, outcome);
++                this.taskMeta.delete(taskId);
++            } else if (lane && lane.inFlight.has(taskId)) {
++                if (outcome !== "superseded") {
++                    this.markOrphan(meta, outcome);
++                }
++            } else {
++                // neither queued nor in flight (e.g. dispatch failed)
++                this.recordFinished(meta, outcome);
++                this.taskMeta.delete(taskId);
++            }
++        }
++
+         pendingTask.rejectWithError(error);
+         this.logger.info(`Task ${taskId} rejected: ${error.message}`);
+         return true;
+@@ -341,12 +578,14 @@ export class PluginBridge {
+      * and awaiting the result.
+      *
+      * @param task - The plugin task to execute
++     * @param options - [mcp-plus] execution options (e.g. timeout override)
+      * @throws Error if no plugin instances are connected or available
+      */
+     public async executePluginTask<TResult extends PluginTaskResult<any>>(
+-        task: PluginTask<any, TResult>
++        task: PluginTask<any, TResult>,
++        options?: ExecutePluginTaskOptions
+     ): Promise<TResult> {
+-        this.sendPluginTask(task, this.redisBridge !== undefined);
++        this.sendPluginTask(task, this.redisBridge !== undefined, undefined, options?.timeoutSecs);
+         return await task.getResultPromise();
+     }
+ 
+@@ -363,16 +602,30 @@ export class PluginBridge {
+      * if the published request reached no instance, i.e. if no instance holds a plugin
+      * connection for the session's user token, or if publishing fails outright.
+      *
++     * [mcp-plus] With PENPOT_MCP_TASK_QUEUE_MAX > 0, local dispatch goes through a per-user FIFO lane:
++     * at most one task is in flight per user; further tasks wait (up to the queue limit) instead of
++     * being sent concurrently. The timeout then covers queue wait plus execution.
++     *
+      * @param task - The task to dispatch
+      * @param useRedis - Whether to route the request via Redis (multi-instance) rather
+      *   than directly over the local WebSocket connection
+      * @param connection - The connection to use for a local (non-remote) dispatch; when
+      *   omitted, the session's connection is resolved via {@link getClientConnection}.
+      *   Ignored when `useRedis` is true.
++     * @param timeoutSecs - [mcp-plus] timeout override (defaults to the configured tool timeout)
+      * @throws Error if a local dispatch is required but no suitable connection is available
+      */
+-    private sendPluginTask(task: AbstractPluginTask<any, any>, useRedis: boolean, connection?: ClientConnection): void {
++    private sendPluginTask(
++        task: AbstractPluginTask<any, any>,
++        useRedis: boolean,
++        connection?: ClientConnection,
++        timeoutSecs?: number
++    ): void {
+         let onTimeout: (() => void) | undefined;
++        const effectiveTimeoutSecs =
++            timeoutSecs !== undefined && Number.isFinite(timeoutSecs) && timeoutSecs > 0
++                ? timeoutSecs
++                : this.taskTimeoutSecs;
+ 
+         if (useRedis) {
+             const sessionContext = this.mcpServer.getSessionContext();
+@@ -384,9 +637,11 @@ export class PluginBridge {
+             this.logger.debug("Dispatching task %s via Redis", task.id);
+ 
+             // register the task for result correlation, then publish the request via Redis
++            // ([mcp-plus] the timeout is forwarded so the receiving instance applies the same budget)
+             this.pendingTasks.set(task.id, task);
++            const request = { ...task.toRequest(), timeoutSecs: effectiveTimeoutSecs } as PluginTaskRequest;
+             void redisBridge
+-                .sendTaskRequest(userToken, task.toRequest(), (response) => this.handlePluginTaskResponse(response))
++                .sendTaskRequest(userToken, request, (response) => this.handlePluginTaskResponse(response))
+                 .then((receiverCount) => {
+                     // fail fast when no instance received the request (no connection with matching user token in any instance)
+                     if (receiverCount === 0) {
+@@ -407,28 +662,302 @@ export class PluginBridge {
+                 throw new Error(`Plugin instance is disconnected. Task could not be sent.`);
+             }
+ 
++            const lane = this.getLane(target.userToken ?? SINGLE_USER_LANE);
++            const laneBusy = lane.inFlight.size > 0 || lane.queue.length > 0;
++
+             // the socket can be open while browser-throttled plugin JS cannot run tasks
+-            assertPluginResponsive(target, Date.now());
++            // ([mcp-plus] unless the plugin is known to be busy executing one of our tasks)
++            assertPluginResponsive(target, Date.now(), this.heartbeatGraceMs, this.plus.busyIsAlive && laneBusy);
++
++            const meta: TaskMeta = {
++                taskId: task.id,
++                taskName: task.task,
++                laneKey: lane.key,
++                enqueuedAt: Date.now(),
++                orphan: false,
++                timeoutSecs: effectiveTimeoutSecs,
++            };
++
++            if (this.queueEnabled) {
++                // [mcp-plus] per-user FIFO
++                if (lane.queue.length >= this.plus.taskQueueMax) {
++                    throw new Error(
++                        `Task queue for this user is full (${lane.queue.length} waiting, ` +
++                            `PENPOT_MCP_TASK_QUEUE_MAX=${this.plus.taskQueueMax}). Retry later.`
++                    );
++                }
++                this.pendingTasks.set(task.id, task);
++                this.taskMeta.set(task.id, meta);
++                lane.queue.push(task.id);
++                this.armTimeout(task, effectiveTimeoutSecs, onTimeout);
++                this.logger.info(
++                    `Queued task ${task.id} (userFp=${tokenFingerprint(lane.key)}, position ${lane.queue.length}, in flight ${lane.inFlight.size})`
++                );
++                this.pumpLane(lane);
++                return;
++            }
+ 
+             // register the task for result correlation, then send over the socket
+             this.pendingTasks.set(task.id, task);
++            this.taskMeta.set(task.id, meta);
++            this.markSent(lane, meta, target);
+             target.socket.send(JSON.stringify(task.toRequest()));
+         }
+ 
+-        // Set up a timeout to reject the task if no response is received
++        this.armTimeout(task, effectiveTimeoutSecs, onTimeout);
++        this.logger.info(`Sent task ${task.id}`);
++    }
++
++    /** Arms the timeout that rejects the task if no response is received. */
++    private armTimeout(task: AbstractPluginTask<any, any>, timeoutSecs: number, onTimeout?: () => void): void {
+         const timeoutHandle = setTimeout(() => {
++            const meta = this.taskMeta.get(task.id);
++            const lane = meta ? this.lanes.get(meta.laneKey) : undefined;
++            const stillQueued = lane !== undefined && lane.queue.includes(task.id);
++            const suffix = stillQueued ? " (while waiting in the per-user task queue)" : "";
+             if (
+                 this.rejectPendingTask(
+                     task.id,
+-                    new Error(`Task ${task.id} timed out after ${this.taskTimeoutSecs} seconds`)
++                    new Error(`Task ${task.id} timed out after ${timeoutSecs} seconds${suffix}`),
++                    "timeout"
+                 )
+             ) {
+                 onTimeout?.();
+             }
+-        }, this.taskTimeoutSecs * 1000);
++        }, timeoutSecs * 1000);
+ 
+         this.taskTimeouts.set(task.id, timeoutHandle);
+-        this.logger.info(`Sent task ${task.id}`);
++    }
++
++    // ------------------------------------------------------------------------------------------
++    // [mcp-plus] lanes
++    // ------------------------------------------------------------------------------------------
++
++    private getLane(key: string): Lane {
++        let lane = this.lanes.get(key);
++        if (!lane) {
++            lane = { key, queue: [], inFlight: new Set() };
++            this.lanes.set(key, lane);
++        }
++        return lane;
++    }
++
++    /** Resolves the current connection serving a lane (may change across reconnects/takeovers). */
++    private resolveLaneConnection(key: string): ClientConnection | undefined {
++        if (key === SINGLE_USER_LANE) {
++            if (this.connectedClients.size !== 1) return undefined;
++            return this.connectedClients.values().next().value;
++        }
++        return this.clientsByToken.get(key);
++    }
++
++    private markSent(lane: Lane, meta: TaskMeta, connection: ClientConnection): void {
++        meta.sentAt = Date.now();
++        meta.connectionId = connection.id;
++        lane.inFlight.add(meta.taskId);
++    }
++
++    /** Dispatches the next queued task of a lane if the lane is idle and a connection is available. */
++    private pumpLane(lane: Lane): void {
++        if (!this.queueEnabled) {
++            return;
++        }
++        while (lane.queue.length > 0 && lane.inFlight.size === 0) {
++            const taskId = lane.queue[0];
++            const task = this.pendingTasks.get(taskId);
++            const meta = this.taskMeta.get(taskId);
++            if (!task || !meta) {
++                lane.queue.shift();
++                continue;
++            }
++            const connection = this.resolveLaneConnection(lane.key);
++            if (!connection || connection.socket.readyState !== WebSocket.OPEN) {
++                // wait for a (re)connection; the task's own timeout still applies
++                this.logger.info(
++                    `Lane userFp=${tokenFingerprint(lane.key)} has queued work but no open connection; waiting`
++                );
++                return;
++            }
++            try {
++                assertPluginResponsive(connection, Date.now(), this.heartbeatGraceMs, false);
++            } catch (error) {
++                // rejectPendingTask removes the task from the queue
++                this.rejectPendingTask(taskId, error instanceof Error ? error : new Error(String(error)));
++                continue;
++            }
++            lane.queue.shift();
++            this.markSent(lane, meta, connection);
++            try {
++                connection.socket.send(JSON.stringify(task.toRequest()));
++                this.logger.info(
++                    `Sent task ${taskId} (waited ${meta.sentAt! - meta.enqueuedAt}ms in queue; ${lane.queue.length} still queued)`
++                );
++            } catch (error) {
++                lane.inFlight.delete(taskId);
++                this.rejectPendingTask(taskId, error instanceof Error ? error : new Error(String(error)));
++                continue;
++            }
++            return;
++        }
++    }
++
++    /** Marks an in-flight task as orphaned: its caller got an error, but the plugin still runs it. */
++    private markOrphan(meta: TaskMeta, outcome: RecentTaskRecord["outcome"]): void {
++        if (meta.orphan) return;
++        meta.orphan = true;
++        this.recordFinished(meta, outcome);
++        const graceMs = this.plus.orphanGraceSecs * 1000;
++        if (graceMs <= 0) {
++            this.finishInFlight(meta.taskId, null);
++            return;
++        }
++        meta.orphanTimer = setTimeout(() => {
++            this.logger.warn(
++                `Orphaned task ${meta.taskId} got no late response within ${this.plus.orphanGraceSecs}s; releasing its lane`
++            );
++            this.finishInFlight(meta.taskId, "orphan-expired");
++        }, graceMs);
++    }
++
++    /**
++     * Removes a task from its lane's in-flight set (on response, late response, supersession or orphan
++     * expiry), records it, and dispatches the next queued task.
++     *
++     * @param outcome - outcome to record, or null if nothing is to be recorded
++     */
++    private finishInFlight(taskId: string, outcome: RecentTaskRecord["outcome"] | null): void {
++        const meta = this.taskMeta.get(taskId);
++        if (!meta) return;
++        if (meta.orphanTimer) clearTimeout(meta.orphanTimer);
++        const lane = this.lanes.get(meta.laneKey);
++        lane?.inFlight.delete(taskId);
++        const qi = lane ? lane.queue.indexOf(taskId) : -1;
++        if (lane && qi >= 0) lane.queue.splice(qi, 1);
++        if (outcome) {
++            this.recordFinished(meta, outcome);
++        }
++        this.taskMeta.delete(taskId);
++        if (lane) {
++            this.pumpLane(lane);
++            if (lane.queue.length === 0 && lane.inFlight.size === 0 && !this.resolveLaneConnection(lane.key)) {
++                this.lanes.delete(lane.key);
++            }
++        }
++    }
++
++    private recordFinished(meta: TaskMeta, outcome: RecentTaskRecord["outcome"]): void {
++        const now = Date.now();
++        const record: RecentTaskRecord = {
++            taskId: meta.taskId,
++            taskName: meta.taskName,
++            userFp: tokenFingerprint(meta.laneKey),
++            queuedMs: (meta.sentAt ?? now) - meta.enqueuedAt,
++            runMs: meta.sentAt !== undefined ? now - meta.sentAt : null,
++            outcome,
++            finishedAt: new Date(now).toISOString(),
++        };
++        this.recentTasks.push(record);
++        if (this.recentTasks.length > RECENT_TASKS_MAX) {
++            this.recentTasks.splice(0, this.recentTasks.length - RECENT_TASKS_MAX);
++        }
++    }
++
++    /** [mcp-plus] Returns the dispatch state of a locally handled task. */
++    public getTaskState(taskId: string): TaskState {
++        const meta = this.taskMeta.get(taskId);
++        if (!meta) return "unknown";
++        if (meta.orphan) return "orphaned";
++        const lane = this.lanes.get(meta.laneKey);
++        if (lane?.queue.includes(taskId)) return "queued";
++        if (lane?.inFlight.has(taskId)) return "in_flight";
++        return "unknown";
++    }
++
++    /**
++     * [mcp-plus] Cancels a pending task. A queued task is removed before it reaches the plugin; an
++     * in-flight task is rejected server-side but keeps running in the plugin (orphan).
++     *
++     * @returns the state the task was in when cancelled, or "unknown" if it was not pending
++     */
++    public cancelTask(taskId: string, reason: string = "Task cancelled"): TaskState {
++        if (!this.pendingTasks.has(taskId)) return "unknown";
++        const state = this.getTaskState(taskId);
++        this.rejectPendingTask(taskId, new Error(reason), "cancelled");
++        return state;
++    }
++
++    /**
++     * [mcp-plus] Returns a stats snapshot. Tokens are only exposed as fingerprints.
++     *
++     * @param onlyToken - if given, per-connection/lane details are restricted to this user token
++     */
++    public getStats(onlyToken?: string): Record<string, unknown> {
++        const now = Date.now();
++        const include = (token: string | null) => onlyToken === undefined || token === onlyToken;
++        const connections = [...this.connectedClients.values()]
++            .filter((c) => include(c.userToken))
++            .map((c) => {
++                const lane = this.lanes.get(c.userToken ?? SINGLE_USER_LANE);
++                return {
++                    id: c.id,
++                    userFp: tokenFingerprint(c.userToken),
++                    ownsToken: c.userToken ? this.clientsByToken.get(c.userToken) === c : null,
++                    connectedForS: Math.round((now - c.connectedAt) / 1000),
++                    lastHeartbeatAgeS: Math.round((now - c.lastHeartbeat) / 1000),
++                    frozen: c.frozen,
++                    busy: (lane?.inFlight.size ?? 0) > 0,
++                    healthy: this.isConnectionHealthy(c),
++                };
++            });
++        const lanes = [...this.lanes.values()]
++            .filter((l) => include(l.key === SINGLE_USER_LANE ? null : l.key))
++            .map((l) => ({
++                userFp: tokenFingerprint(l.key),
++                queueLength: l.queue.length,
++                inFlight: [...l.inFlight].map((id) => {
++                    const m = this.taskMeta.get(id);
++                    return {
++                        taskId: id,
++                        taskName: m?.taskName,
++                        runningForS: m?.sentAt ? Math.round((now - m.sentAt) / 1000) : null,
++                        orphan: m?.orphan ?? false,
++                    };
++                }),
++                queued: l.queue.map((id) => {
++                    const m = this.taskMeta.get(id);
++                    return {
++                        taskId: id,
++                        taskName: m?.taskName,
++                        waitingForS: m ? Math.round((now - m.enqueuedAt) / 1000) : null,
++                    };
++                }),
++            }));
++        const ownFp = onlyToken !== undefined ? tokenFingerprint(onlyToken) : undefined;
++        const recent = this.recentTasks.filter((r) => ownFp === undefined || r.userFp === ownFp);
++        const runDurations = recent.filter((r) => r.runMs !== null).map((r) => r.runMs as number);
++        const global = onlyToken === undefined;
++        return {
++            connectedPlugins: global ? this.connectedClients.size : connections.length,
++            ...(global
++                ? {
++                      registeredTokens: this.clientsByToken.size,
++                      pendingTasks: this.pendingTasks.size,
++                      takeovers: this.takeoverCount,
++                      rejectedDuplicates: this.rejectedDuplicateCount,
++                  }
++                : {}),
++            connections,
++            lanes,
++            recentTasks: recent.slice(-20),
++            recentRunMs:
++                runDurations.length > 0
++                    ? {
++                          count: runDurations.length,
++                          avg: Math.round(runDurations.reduce((a, b) => a + b, 0) / runDurations.length),
++                          max: Math.max(...runDurations),
++                      }
++                    : null,
++        };
+     }
+ 
+     /**
+@@ -462,7 +991,14 @@ export class PluginBridge {
+         }
+ 
+         try {
+-            this.sendPluginTask(task, false, connection);
++            // [mcp-plus] honour the requester's timeout (forwarded alongside the request)
++            const forwardedTimeout = (request as { timeoutSecs?: unknown }).timeoutSecs;
++            this.sendPluginTask(
++                task,
++                false,
++                connection,
++                typeof forwardedTimeout === "number" ? forwardedTimeout : undefined
++            );
+         } catch (error) {
+             task.rejectWithError(error instanceof Error ? error : new Error(String(error)));
+         }
+@@ -472,6 +1008,21 @@ export class PluginBridge {
+      * Closes the WebSocket server and all connected client sockets.
+      */
+     public async close(): Promise<void> {
++        // [mcp-plus] release timers so the process can exit cleanly
++        for (const meta of this.taskMeta.values()) {
++            if (meta.orphanTimer) clearTimeout(meta.orphanTimer);
++        }
++        for (const handle of this.taskTimeouts.values()) {
++            clearTimeout(handle);
++        }
++        for (const connection of this.connectedClients.values()) {
++            clearInterval(connection.pingInterval);
++            try {
++                connection.socket.terminate();
++            } catch {
++                /* ignore */
++            }
++        }
+         return new Promise((resolve) => {
+             this.wsServer.close(() => {
+                 this.logger.info("WebSocket server closed");
+diff --git a/mcp/packages/server/src/PlusConfig.test.ts b/mcp/packages/server/src/PlusConfig.test.ts
+new file mode 100644
+index 0000000..ad26622
+--- /dev/null
++++ b/mcp/packages/server/src/PlusConfig.test.ts
+@@ -0,0 +1,54 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import { loadPlusConfig } from "./PlusConfig";
++
++test("[mcp-plus] defaults reproduce upstream behaviour", () => {
++    const c = loadPlusConfig({});
++    assert.equal(c.maxBody, "100kb");
++    assert.equal(c.toolTimeoutSecs, 120);
++    assert.equal(c.heartbeatGraceSecs, 30);
++    assert.equal(c.taskQueueMax, 0);
++    assert.equal(c.busyIsAlive, false);
++    assert.equal(c.connectionPolicy, "reject");
++    assert.equal(c.sessionTtlSecs, 3600);
++    assert.equal(c.sessionSweepSecs, 1800);
++    assert.equal(c.maxSessions, 0);
++    assert.equal(c.enableJobs, false);
++    assert.equal(c.enableBatch, false);
++    assert.equal(c.enableStats, false);
++    assert.equal(c.progressIntervalSecs, 0);
++});
++
++test("[mcp-plus] env overrides are parsed", () => {
++    const c = loadPlusConfig({
++        PENPOT_MCP_MAX_BODY: "5mb",
++        PENPOT_MCP_TOOL_TIMEOUT_S: "300",
++        PENPOT_MCP_HEARTBEAT_GRACE_S: "90",
++        PENPOT_MCP_TASK_QUEUE_MAX: "8",
++        PENPOT_MCP_CONNECTION_POLICY: "takeover-stale",
++        PENPOT_MCP_SESSION_TTL_S: "600",
++        PENPOT_MCP_ENABLE_JOBS: "true",
++        PENPOT_MCP_ENABLE_BATCH: "1",
++        PENPOT_MCP_ENABLE_STATS: "yes",
++    });
++    assert.equal(c.maxBody, "5mb");
++    assert.equal(c.toolTimeoutSecs, 300);
++    assert.equal(c.heartbeatGraceSecs, 90);
++    assert.equal(c.taskQueueMax, 8);
++    assert.equal(c.busyIsAlive, true, "queueing implies busy-is-alive unless overridden");
++    assert.equal(c.connectionPolicy, "takeover-stale");
++    assert.equal(c.sessionTtlSecs, 600);
++    assert.equal(c.sessionSweepSecs, 60);
++    assert.equal(c.enableJobs && c.enableBatch && c.enableStats, true);
++});
++
++test("[mcp-plus] invalid numbers fall back to defaults instead of NaN", () => {
++    const c = loadPlusConfig({ PENPOT_MCP_TOOL_TIMEOUT_S: "abc", PENPOT_MCP_CONNECTION_POLICY: "bogus" });
++    assert.equal(c.toolTimeoutSecs, 120);
++    assert.equal(c.connectionPolicy, "reject");
++});
++
++test("[mcp-plus] busy-is-alive can be disabled explicitly with queueing", () => {
++    const c = loadPlusConfig({ PENPOT_MCP_TASK_QUEUE_MAX: "4", PENPOT_MCP_BUSY_IS_ALIVE: "false" });
++    assert.equal(c.busyIsAlive, false);
++});
+diff --git a/mcp/packages/server/src/PlusConfig.ts b/mcp/packages/server/src/PlusConfig.ts
+new file mode 100644
+index 0000000..2a53165
+--- /dev/null
++++ b/mcp/packages/server/src/PlusConfig.ts
+@@ -0,0 +1,111 @@
++/**
++ * "mcp-plus" configuration: opt-in extensions to the upstream Penpot MCP server.
++ *
++ * Every setting is read from an environment variable. When a variable is unset, the
++ * resulting value reproduces the upstream (2.18.0) behaviour exactly.
++ */
++
++export type ConnectionPolicy = "reject" | "takeover" | "takeover-stale";
++
++export interface PlusConfig {
++    /** express.json() body limit (e.g. "5mb"); upstream default is body-parser's "100kb". */
++    maxBody: string;
++    /** timeout for plugin tasks triggered by synchronous tools (execute_code, export_shape, ...). */
++    toolTimeoutSecs: number;
++    /** max age of the last plugin heartbeat before a tab is considered suspended. */
++    heartbeatGraceSecs: number;
++    /** whether a connection with a task in flight is treated as alive regardless of heartbeat age. */
++    busyIsAlive: boolean;
++    /** max number of tasks waiting per user lane; 0 disables queueing (upstream behaviour). */
++    taskQueueMax: number;
++    /** how long a timed-out (orphaned) task keeps its lane busy while waiting for a late plugin response. */
++    orphanGraceSecs: number;
++    /** policy for a second plugin connection with an already-connected user token. */
++    connectionPolicy: ConnectionPolicy;
++    /** idle TTL of MCP (Streamable HTTP / SSE) sessions. */
++    sessionTtlSecs: number;
++    /** interval of the idle-session sweeper. */
++    sessionSweepSecs: number;
++    /** max number of concurrent MCP sessions (oldest idle ones are evicted); 0 = unlimited. */
++    maxSessions: number;
++    /** whether submit_code / job_status / cancel_job are registered. */
++    enableJobs: boolean;
++    /** default and maximum total runtime of a background job. */
++    jobTimeoutSecs: number;
++    /** how long finished jobs are retained for job_status. */
++    jobRetentionSecs: number;
++    /** max number of unfinished jobs per user. */
++    jobMaxActivePerUser: number;
++    /** max long-poll wait for job_status(wait_s). */
++    jobMaxWaitSecs: number;
++    /** whether batch_execute is registered. */
++    enableBatch: boolean;
++    /** max number of chunks accepted by batch_execute / submit_code(chunks). */
++    batchMaxChunks: number;
++    /** whether server_stats tool and GET /stats are enabled. */
++    enableStats: boolean;
++    /** interval of MCP progress notifications during long tool calls (requires client progressToken); 0 = off. */
++    progressIntervalSecs: number;
++}
++
++function envStr(env: Record<string, string | undefined>, name: string): string | undefined {
++    const v = env[name];
++    return v === undefined || v.trim() === "" ? undefined : v.trim();
++}
++
++function envInt(env: Record<string, string | undefined>, name: string, def: number, min: number): number {
++    const raw = envStr(env, name);
++    if (raw === undefined) return def;
++    const n = Number.parseInt(raw, 10);
++    if (!Number.isFinite(n) || Number.isNaN(n) || n < min) {
++        // invalid values must never produce NaN timers (setTimeout(NaN) fires immediately)
++        console.warn(`[mcp-plus] ignoring invalid ${name}=${JSON.stringify(raw)}; using default ${def}`);
++        return def;
++    }
++    return n;
++}
++
++function envBool(env: Record<string, string | undefined>, name: string, def: boolean): boolean {
++    const raw = envStr(env, name);
++    if (raw === undefined) return def;
++    return ["1", "true", "yes", "on"].includes(raw.toLowerCase());
++}
++
++export function loadPlusConfig(env: Record<string, string | undefined> = process.env): PlusConfig {
++    const taskQueueMax = envInt(env, "PENPOT_MCP_TASK_QUEUE_MAX", 0, 0);
++
++    const policyRaw = (envStr(env, "PENPOT_MCP_CONNECTION_POLICY") ?? "reject").toLowerCase();
++    let connectionPolicy: ConnectionPolicy = "reject";
++    if (policyRaw === "takeover" || policyRaw === "takeover-stale" || policyRaw === "reject") {
++        connectionPolicy = policyRaw;
++    } else {
++        console.warn(`[mcp-plus] ignoring invalid PENPOT_MCP_CONNECTION_POLICY=${policyRaw}; using "reject"`);
++    }
++
++    const sessionTtlSet = envStr(env, "PENPOT_MCP_SESSION_TTL_S") !== undefined;
++    const sessionTtlSecs = envInt(env, "PENPOT_MCP_SESSION_TTL_S", 3600, 10);
++    // upstream: 60 min TTL, swept every 30 min; when a TTL is configured, sweep more often
++    const defaultSweep = sessionTtlSet ? Math.max(5, Math.min(60, Math.floor(sessionTtlSecs / 2))) : 1800;
++
++    return {
++        maxBody: envStr(env, "PENPOT_MCP_MAX_BODY") ?? "100kb",
++        toolTimeoutSecs: envInt(env, "PENPOT_MCP_TOOL_TIMEOUT_S", 120, 1),
++        heartbeatGraceSecs: envInt(env, "PENPOT_MCP_HEARTBEAT_GRACE_S", 30, 1),
++        busyIsAlive: envBool(env, "PENPOT_MCP_BUSY_IS_ALIVE", taskQueueMax > 0),
++        taskQueueMax,
++        orphanGraceSecs: envInt(env, "PENPOT_MCP_ORPHAN_TASK_GRACE_S", 600, 0),
++        connectionPolicy,
++        sessionTtlSecs,
++        sessionSweepSecs: envInt(env, "PENPOT_MCP_SESSION_SWEEP_S", defaultSweep, 1),
++        maxSessions: envInt(env, "PENPOT_MCP_MAX_SESSIONS", 0, 0),
++        enableJobs: envBool(env, "PENPOT_MCP_ENABLE_JOBS", false),
++        jobTimeoutSecs: envInt(env, "PENPOT_MCP_JOB_TIMEOUT_S", 1800, 1),
++        jobRetentionSecs: envInt(env, "PENPOT_MCP_JOB_RETENTION_S", 3600, 10),
++        jobMaxActivePerUser: envInt(env, "PENPOT_MCP_JOB_MAX_ACTIVE", 20, 1),
++        jobMaxWaitSecs: envInt(env, "PENPOT_MCP_JOB_MAX_WAIT_S", 50, 0),
++        enableBatch: envBool(env, "PENPOT_MCP_ENABLE_BATCH", false),
++        batchMaxChunks: envInt(env, "PENPOT_MCP_BATCH_MAX_CHUNKS", 100, 1),
++        enableStats: envBool(env, "PENPOT_MCP_ENABLE_STATS", false),
++        progressIntervalSecs: envInt(env, "PENPOT_MCP_PROGRESS_INTERVAL_S", 0, 0),
++    };
++}
+diff --git a/mcp/packages/server/src/ReplServer.ts b/mcp/packages/server/src/ReplServer.ts
+index 1894ade..189534a 100644
+--- a/mcp/packages/server/src/ReplServer.ts
++++ b/mcp/packages/server/src/ReplServer.ts
+@@ -36,7 +36,8 @@ export class ReplServer {
+      * Sets up Express middleware for request parsing and static content.
+      */
+     private setupMiddleware(): void {
+-        this.app.use(express.json());
++        // [mcp-plus] PENPOT_MCP_MAX_BODY also applies to the (dev-only) REPL server
++        this.app.use(express.json({ limit: this.pluginBridge.mcpServer.plusConfig?.maxBody ?? "100kb" }));
+     }
+ 
+     /**
+diff --git a/mcp/packages/server/src/Tool.ts b/mcp/packages/server/src/Tool.ts
+index df4e1f2..e7491e5 100644
+--- a/mcp/packages/server/src/Tool.ts
++++ b/mcp/packages/server/src/Tool.ts
+@@ -36,8 +36,11 @@ export abstract class Tool<TArgs extends object> {
+      * This method handles the unknown args from the MCP protocol,
+      * delegating to the type-safe implementation.
+      */
+-    async execute(args: unknown): Promise<ToolResponse> {
++    async execute(args: unknown, extra?: any): Promise<ToolResponse> {
+         const executionId = ++Tool.executionCounter;
++        // [mcp-plus] optional keep-alive progress notifications (PENPOT_MCP_PROGRESS_INTERVAL_S), sent only
++        // if the client supplied a progressToken; lets clients that reset their timeout on progress wait longer
++        const progressTimer = this.startProgressNotifications(extra);
+         try {
+             let argsInstance: TArgs = args as TArgs;
+             this.logger.info("Tool execution #%d starting: %s", executionId, this.getToolName());
+@@ -53,9 +56,35 @@ export abstract class Tool<TArgs extends object> {
+         } catch (error) {
+             this.logger.error("Tool execution #%d failed: %s; error: %s", executionId, this.getToolName(), error);
+             return new TextResponse(`Tool execution failed: ${String(error)}`);
++        } finally {
++            if (progressTimer) clearInterval(progressTimer);
+         }
+     }
+ 
++    /**
++     * [mcp-plus] Starts periodic `notifications/progress` messages for the current request, if enabled
++     * and requested by the client.
++     */
++    private startProgressNotifications(extra: any): NodeJS.Timeout | undefined {
++        const intervalSecs = this.mcpServer.plusConfig?.progressIntervalSecs ?? 0;
++        const progressToken = extra?._meta?.progressToken;
++        if (intervalSecs <= 0 || progressToken === undefined || typeof extra?.sendNotification !== "function") {
++            return undefined;
++        }
++        const start = Date.now();
++        const timer = setInterval(() => {
++            const elapsed = Math.round((Date.now() - start) / 1000);
++            extra
++                .sendNotification({
++                    method: "notifications/progress",
++                    params: { progressToken, progress: elapsed, message: `${this.getToolName()} running for ${elapsed}s` },
++                })
++                .catch((error: unknown) => this.logger.debug("Failed to send progress notification: %s", error));
++        }, intervalSecs * 1000);
++        timer.unref();
++        return timer;
++    }
++
+     /**
+      * Formats tool arguments for readable logging.
+      *
+diff --git a/mcp/packages/server/src/tools/ImportPenpotFileTool.ts b/mcp/packages/server/src/tools/ImportPenpotFileTool.ts
+index f55ae19..8839fc3 100644
+--- a/mcp/packages/server/src/tools/ImportPenpotFileTool.ts
++++ b/mcp/packages/server/src/tools/ImportPenpotFileTool.ts
+@@ -37,6 +37,11 @@ export class ImportPenpotFileTool extends Tool<ImportPenpotFileArgs> {
+     private static readonly POLL_INTERVAL_MS = 1_000;
+     private static readonly IMPORT_TIMEOUT_MS = 120_000;
+ 
++    /** [mcp-plus] honours PENPOT_MCP_TOOL_TIMEOUT_S (default 120 s, as upstream) */
++    private importTimeoutMs(): number {
++        return (this.mcpServer.toolTimeoutSecs ?? ImportPenpotFileTool.IMPORT_TIMEOUT_MS / 1000) * 1000;
++    }
++
+     // assumes cwd is the server package root (same assumption as ConfigurationLoader)
+     private static readonly PUBLIC_DIR = path.resolve("../../../frontend/resources/public");
+ 
+@@ -241,7 +246,7 @@ export class ImportPenpotFileTool extends Tool<ImportPenpotFileArgs> {
+         const startTime = Date.now();
+ 
+         // phase 1: wait for the import to complete
+-        while (Date.now() - startTime < ImportPenpotFileTool.IMPORT_TIMEOUT_MS) {
++        while (Date.now() - startTime < this.importTimeoutMs()) {
+             await this.sleep(ImportPenpotFileTool.POLL_INTERVAL_MS);
+ 
+             const pollResult = await this.nreplClient.evalCljs(`(pr-str @${atomName})`);
+@@ -257,7 +262,7 @@ export class ImportPenpotFileTool extends Tool<ImportPenpotFileArgs> {
+             }
+         }
+ 
+-        throw new Error(`Import timed out after ${ImportPenpotFileTool.IMPORT_TIMEOUT_MS / 1000} seconds`);
++        throw new Error(`Import timed out after ${this.importTimeoutMs() / 1000} seconds`);
+     }
+ 
+     /**
+diff --git a/mcp/packages/server/src/tools/PlusTools.ts b/mcp/packages/server/src/tools/PlusTools.ts
+new file mode 100644
+index 0000000..63d8c18
+--- /dev/null
++++ b/mcp/packages/server/src/tools/PlusTools.ts
+@@ -0,0 +1,277 @@
++import { z } from "zod";
++import "reflect-metadata";
++import { EmptyToolArgs, Tool } from "../Tool";
++import { TextResponse, type ToolResponse } from "../ToolResponse";
++import type { PenpotMcpServer } from "../PenpotMcpServer";
++import { runChunks, type ChunkResult, type JobManager } from "../JobManager";
++import type { PlusConfig } from "../PlusConfig";
++
++/**
++ * [mcp-plus] additional tools: submit_code, job_status, cancel_job, batch_execute, server_stats.
++ */
++
++function json(value: unknown): TextResponse {
++    return new TextResponse(JSON.stringify(value, null, 2));
++}
++
++function chunksSchema(max: number) {
++    return z
++        .array(z.string().min(1, "Chunk cannot be empty"))
++        .min(1)
++        .max(max)
++        .describe(
++            `Array of JavaScript code chunks (max ${max}), executed sequentially in the plugin context, each exactly ` +
++                "like an execute_code call. `storage` persists across chunks, so later chunks can use results stored " +
++                "by earlier ones."
++        );
++}
++
++// ------------------------------------------------------------------------------------------------
++// submit_code
++// ------------------------------------------------------------------------------------------------
++
++export class SubmitCodeArgs {
++    static schema(cfg: PlusConfig) {
++        return {
++            code: z
++                .string()
++                .min(1)
++                .optional()
++                .describe("JavaScript code to execute in the background (same semantics as execute_code)."),
++            chunks: chunksSchema(cfg.batchMaxChunks)
++                .optional()
++                .describe("Alternative to `code`: several chunks executed sequentially within one job."),
++            stop_on_error: z
++                .boolean()
++                .optional()
++                .describe("For `chunks`: stop at the first failing chunk (default true)."),
++            timeout_s: z
++                .number()
++                .int()
++                .positive()
++                .optional()
++                .describe(`Total job runtime budget in seconds (default and maximum: ${cfg.jobTimeoutSecs}).`),
++        };
++    }
++
++    code?: string;
++    chunks?: string[];
++    stop_on_error?: boolean;
++    timeout_s?: number;
++}
++
++export class SubmitCodeTool extends Tool<SubmitCodeArgs> {
++    constructor(
++        mcpServer: PenpotMcpServer,
++        private readonly jobs: JobManager,
++        cfg: PlusConfig
++    ) {
++        super(mcpServer, SubmitCodeArgs.schema(cfg));
++    }
++
++    public getToolName(): string {
++        return "submit_code";
++    }
++
++    public getToolDescription(): string {
++        return (
++            "Starts executing JavaScript code in the Penpot plugin context in the BACKGROUND and immediately returns a " +
++            "`jobId`. Use this instead of execute_code for long-running work (large generations, many shapes) that " +
++            "could exceed the synchronous tool timeout. The code has exactly the same semantics as for execute_code " +
++            "(`penpot`, `penpotUtils`, `storage`; return a value to get it back). Alternatively pass `chunks` to run " +
++            "several code pieces sequentially in one job. Then call `job_status` (with `wait_s` to long-poll) until the " +
++            "state is no longer 'running', or `cancel_job` to abort. Jobs survive the client HTTP request."
++        );
++    }
++
++    protected async executeCore(args: SubmitCodeArgs): Promise<ToolResponse> {
++        const hasCode = typeof args.code === "string" && args.code.length > 0;
++        const hasChunks = Array.isArray(args.chunks) && args.chunks.length > 0;
++        if (hasCode === hasChunks) {
++            throw new Error("Provide exactly one of `code` or `chunks`.");
++        }
++        const chunks = hasCode ? [args.code!] : args.chunks!;
++        const userToken = this.getSessionContext()?.userToken;
++        const job = this.jobs.submit(userToken, chunks, args.stop_on_error ?? true, args.timeout_s);
++        return json({
++            jobId: job.id,
++            state: job.state,
++            timeoutS: job.timeoutSecs,
++            hint: "Poll with job_status({ job_id, wait_s: 30 }).",
++        });
++    }
++}
++
++// ------------------------------------------------------------------------------------------------
++// job_status
++// ------------------------------------------------------------------------------------------------
++
++export class JobStatusArgs {
++    static schema(cfg: PlusConfig) {
++        return {
++            job_id: z.string().min(1).describe("The jobId returned by submit_code."),
++            wait_s: z
++                .number()
++                .min(0)
++                .optional()
++                .describe(
++                    `Long-poll: wait up to this many seconds (max ${cfg.jobMaxWaitSecs}) for the job to finish before ` +
++                        "answering. Default 0 (answer immediately)."
++                ),
++        };
++    }
++
++    job_id!: string;
++    wait_s?: number;
++}
++
++export class JobStatusTool extends Tool<JobStatusArgs> {
++    constructor(
++        mcpServer: PenpotMcpServer,
++        private readonly jobs: JobManager,
++        cfg: PlusConfig
++    ) {
++        super(mcpServer, JobStatusArgs.schema(cfg));
++    }
++
++    public getToolName(): string {
++        return "job_status";
++    }
++
++    public getToolDescription(): string {
++        return (
++            "Returns the state of a background job started with submit_code: state ('running', 'succeeded', " +
++            "'failed', 'cancelled', 'timed_out'), elapsed seconds and, once finished, the result/log (single code) or " +
++            "per-chunk results, or the error. Use `wait_s` to long-poll instead of polling rapidly."
++        );
++    }
++
++    protected async executeCore(args: JobStatusArgs): Promise<ToolResponse> {
++        const job = this.jobs.get(args.job_id, this.getSessionContext()?.userToken);
++        await this.jobs.wait(job, args.wait_s ?? 0);
++        return json(this.jobs.describe(job));
++    }
++}
++
++// ------------------------------------------------------------------------------------------------
++// cancel_job
++// ------------------------------------------------------------------------------------------------
++
++export class CancelJobArgs {
++    static schema = {
++        job_id: z.string().min(1).describe("The jobId returned by submit_code."),
++    };
++
++    job_id!: string;
++}
++
++export class CancelJobTool extends Tool<CancelJobArgs> {
++    constructor(
++        mcpServer: PenpotMcpServer,
++        private readonly jobs: JobManager
++    ) {
++        super(mcpServer, CancelJobArgs.schema);
++    }
++
++    public getToolName(): string {
++        return "cancel_job";
++    }
++
++    public getToolDescription(): string {
++        return (
++            "Cancels a running background job. Chunks not yet sent to the plugin are dropped. NOTE: code that is " +
++            "already executing inside the Penpot tab cannot be interrupted and may still complete."
++        );
++    }
++
++    protected async executeCore(args: CancelJobArgs): Promise<ToolResponse> {
++        const job = this.jobs.get(args.job_id, this.getSessionContext()?.userToken);
++        const { wasState, taskState } = this.jobs.cancel(job);
++        await this.jobs.wait(job, 2);
++        return json({
++            jobId: job.id,
++            previousState: wasState,
++            cancelledTaskWas: taskState,
++            ...this.jobs.describe(job, false),
++        });
++    }
++}
++
++// ------------------------------------------------------------------------------------------------
++// batch_execute
++// ------------------------------------------------------------------------------------------------
++
++export class BatchExecuteArgs {
++    static schema(cfg: PlusConfig) {
++        return {
++            chunks: chunksSchema(cfg.batchMaxChunks),
++            stop_on_error: z
++                .boolean()
++                .optional()
++                .describe("Stop at the first failing chunk (default true); remaining chunks are skipped."),
++        };
++    }
++
++    chunks!: string[];
++    stop_on_error?: boolean;
++}
++
++export class BatchExecuteTool extends Tool<BatchExecuteArgs> {
++    constructor(mcpServer: PenpotMcpServer, cfg: PlusConfig) {
++        super(mcpServer, BatchExecuteArgs.schema(cfg));
++    }
++
++    public getToolName(): string {
++        return "batch_execute";
++    }
++
++    public getToolDescription(): string {
++        return (
++            "Executes several JavaScript code chunks sequentially in the Penpot plugin context in ONE tool call, " +
++            "returning per-chunk results (result, log, error, durationMs). Each chunk has the same semantics as an " +
++            "execute_code call and is subject to the per-task timeout; `storage` persists between chunks. " +
++            "For work that may take minutes in total, prefer submit_code with `chunks`."
++        );
++    }
++
++    protected async executeCore(args: BatchExecuteArgs): Promise<ToolResponse> {
++        const results: ChunkResult[] = [];
++        const start = Date.now();
++        await runChunks(this.mcpServer, args.chunks, args.stop_on_error ?? true, results);
++        return json({
++            ok: results.length === args.chunks.length && results.every((r) => r.ok),
++            executed: results.length,
++            total: args.chunks.length,
++            totalMs: Date.now() - start,
++            results,
++        });
++    }
++}
++
++// ------------------------------------------------------------------------------------------------
++// server_stats
++// ------------------------------------------------------------------------------------------------
++
++export class ServerStatsTool extends Tool<EmptyToolArgs> {
++    constructor(mcpServer: PenpotMcpServer) {
++        super(mcpServer, EmptyToolArgs.schema);
++    }
++
++    public getToolName(): string {
++        return "server_stats";
++    }
++
++    public getToolDescription(): string {
++        return (
++            "Returns diagnostic statistics of the Penpot MCP server: plugin connection health (heartbeat age, busy, " +
++            "frozen), per-user task queue, running background jobs, and recent task durations. Useful to check " +
++            "whether the Penpot tab is connected/responsive before starting heavy work. In multi-user mode, only " +
++            "your own connection's details are shown."
++        );
++    }
++
++    protected async executeCore(_args: EmptyToolArgs): Promise<ToolResponse> {
++        const token = this.mcpServer.isMultiUserMode() ? this.getSessionContext()?.userToken ?? "" : undefined;
++        return json(this.mcpServer.getStats(token));
++    }
++}

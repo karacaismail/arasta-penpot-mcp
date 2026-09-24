@@ -1,0 +1,56 @@
+{
+  "generated": "2026-09-24T12:18:39.761Z",
+  "totalCalls": 652,
+  "okRate": 98.8,
+  "first": "2026-09-24T08:02:03.307Z",
+  "last": "2026-09-24T12:18:24.366Z",
+  "tools": [
+    {
+      "tool": "high_level_overview",
+      "calls": 1,
+      "ok": 1,
+      "p50": 9,
+      "p95": 9,
+      "max": 9,
+      "maxBodyKB": 0
+    },
+    {
+      "tool": "execute_code",
+      "calls": 558,
+      "ok": 557,
+      "p50": 90,
+      "p95": 52218,
+      "max": 119994,
+      "maxBodyKB": 114
+    },
+    {
+      "tool": "penpot_api_info",
+      "calls": 21,
+      "ok": 21,
+      "p50": 6,
+      "p95": 11,
+      "max": 12,
+      "maxBodyKB": 0
+    },
+    {
+      "tool": "export_shape",
+      "calls": 72,
+      "ok": 65,
+      "p50": 3429,
+      "p95": 7125,
+      "max": 66607,
+      "maxBodyKB": 0
+    }
+  ],
+  "errors": {
+    "diğer": 7,
+    "PayloadTooLarge": 1
+  },
+  "frames": {
+    "count": 151,
+    "shapes": 63596,
+    "p50ms": 3733,
+    "p95ms": 35551,
+    "maxms": 77366
+  }
+}

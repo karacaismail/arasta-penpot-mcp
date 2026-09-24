@@ -1,0 +1,23 @@
+{
+  "name": "penpot-mcp-plus-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Next-gen client toolkit for driving Penpot through its MCP server: persistent daemon, chunked module loader, smart waiting, resumable job runner.",
+  "bin": {
+    "pp": "./pp.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "PP_ALLOW_PORTS=4601-4603 node --test --test-concurrency=1 'test/*.test.mjs'",
+    "test:e2e": "PP_ALLOW_PORTS=4501-4503 node --test --test-concurrency=1 --test-timeout=300000 test/e2e/*.test.mjs",
+    "mock": "node test/mock-server.mjs --port 4601"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  }
+}

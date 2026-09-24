@@ -1,0 +1,11 @@
+# [mcp-plus] Overlay image: upstream penpotapp/mcp:2.18 (rev 5baffdc2 = tag 2.18.0) with the patched server bundle.
+# node_modules, data/ and static/ come unchanged from the upstream image (same pnpm-lock.yaml).
+# Build context: mcp/packages/server/dist  (run `pnpm run build` in mcp/packages/server first)
+ARG BASE_IMAGE=penpotapp/mcp:2.18
+FROM ${BASE_IMAGE}
+LABEL org.opencontainers.image.title="penpot-mcp-plus" \
+      org.opencontainers.image.description="Penpot MCP server 2.18.0 + mcp-plus opt-in extensions (see README-PLUS.md)"
+COPY --chown=node:node index.js /opt/penpot/mcp/index.js
+USER node
+WORKDIR /opt/penpot/mcp
+CMD ["node", "index.js", "--multi-user"]

@@ -1,0 +1,32 @@
+# Mirrors ~/penpot/mcp-client/v2/build-all.sh (+ boot.sh module list, + the PH icon table that
+# run.sh's guard requires but build-all.sh's boot() never reloads).
+# Paths are read-only references into the existing client; nothing there is modified.
+name: arasta-v2
+baseDir: /Users/w6x/penpot/mcp-client          # module + pagesFile paths are relative to this
+modules:
+  - v2/core.js
+  - v2/ui-base.js
+  - v2/ui-nav.js
+  - v2/ui-commerce.js
+  - v2/shell.js
+  - v2/pages-a.js
+  - v2/pages-b.js
+  - v2/pages-c.js
+  - { file: js/icons.js, kind: data, key: PH }   # 117 KB -> loaded in 2 chunks into storage.PH
+require:
+  globals: [RUN, ARRANGE]
+  storage: [PH]
+pagesFile: v2/pages.txt                          # "page|key" lines
+batches: "P320,P360 P390,P430 L480,L844 L932,T600 T768,T1024P T960,T1024L T1366,K1280 K1440,K1728 D1920 W2560 TV U8K"
+templates:
+  batch: "return await RUN({{page}}, {{key}}, {{ids}});"
+  after: "return await ARRANGE({{page}}, {{title}});"   # title = page without the "NN · " prefix
+policy:
+  retries: 2                  # build-all.sh: 3 attempts per batch
+  reboots: 3
+  retryBackoffMs: 5000
+  failPattern: "\\bERR\\b"   # build-all.sh retried on " ERR " in the output
+  settleMs: { after: 15000 }  # findings #21: UI re-render stall after ARRANGE
+  continueOnFailure: true
+checkpoint: ../state/arasta-v2.checkpoint.json   # relative to this manifest file
+report: ../state/arasta-v2.report.jsonl

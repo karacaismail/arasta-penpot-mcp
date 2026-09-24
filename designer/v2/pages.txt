@@ -1,0 +1,22 @@
+10 · Ana Sayfa|home
+11 · Kategoriler|categories
+12 · Arama & Liste|search
+13 · Ürün Detayı|pdp
+14 · Ürün Karşılaştırma|compare
+15 · Tedarikçi Arama|suppliers
+16 · Tedarikçi Mağazası|store
+17 · Flash Fırsatlar|flash
+18 · Teklif İste (AI RFQ)|rfq
+19 · Teklif Karşılaştırma|quotes
+20 · Sepet|cart
+21 · Ödeme|checkout
+22 · Sipariş Onayı & Takip|order
+23 · Mesajlar|messages
+24 · Alıcı Paneli|dashboard
+25 · Giriş|login
+26 · Kurumsal Kayıt|signup
+27 · Ticaret Güvencesi|trust
+28 · Tedarikçi Olun|sell
+29 · Yardım Merkezi|help
+30 · Hakkımızda|about
+31 · 404, Bakım & Boş Durumlar|states
