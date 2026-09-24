@@ -1,0 +1,7 @@
+.pg-arama .ara-tools{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pg-arama .ara-filters form{display:grid;gap:16px;padding:20px}.pg-arama .ara-fs{display:grid;gap:4px;padding-bottom:16px;border-bottom:1px solid var(--border-subtle);min-width:0}
+.pg-arama .ara-fs legend{font:var(--t-label);padding:0;margin-bottom:4px}.pg-arama .ara-range{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}.pg-arama .ara-range .field{min-width:0}.pg-arama .ara-range label{font:var(--t-body);color:var(--text-secondary)}
+.pg-arama .ara-results{display:grid;gap:var(--gap);min-width:0}.pg-arama .ara-bar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.pg-arama .ara-count{font:var(--t-body);color:var(--text-secondary);padding-bottom:12px}.pg-arama .ara-sort{width:240px}.pg-arama .ara-sort label{font:var(--t-body);color:var(--text-secondary)}
+.pg-arama .ara-more{padding-top:8px}.pg-arama .ara-more .container{display:grid;justify-items:center;gap:8px}.pg-arama .ara-more .muted{color:var(--text-tertiary)}
+.pg-arama .ara-range .field{grid-template-columns:minmax(0,1fr)}.pg-arama .ara-range .control{min-width:0}.pg-arama .ara-range input{width:100%}

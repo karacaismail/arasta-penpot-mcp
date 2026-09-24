@@ -8,6 +8,9 @@ const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
 const write = (f, s) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, s); };
 // clean previous screen output (keep rapor/ and .nojekyll)
 for (const c of CLUSTERS) fs.rmSync(path.join(OUT, c.slug), { recursive: true, force: true });
+import crypto from 'node:crypto';
+const VER = crypto.createHash('sha1').update(['src/tokens.css','src/components.css','src/pages.css','src/app.js'].map((f) => fs.readFileSync(path.join(W, f), 'utf8')).join('') + fs.readdirSync(path.join(W, 'src/pages')).filter((f) => f.endsWith('.css')).map((f) => fs.readFileSync(path.join(W, 'src/pages', f), 'utf8')).join('')).digest('hex').slice(0, 10);
+ctx.v = VER;
 const mods = {};
 for (const p of PAGES) { const f = path.join(W, 'src/pages', p.slug + '.mjs'); mods[p.slug] = (process.env.READY && !process.env.READY.split(',').includes(p.slug)) ? null : fs.existsSync(f) ? (await import(pathToFileURL(f).href + '?v=' + Date.now())).default : null; }
 let files = 0, errors = [];
@@ -26,7 +29,7 @@ for (const s of SCREENS) {
 const shellDoc = (base, title, body) => `<!doctype html><html lang="tr" data-fam="desktop"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title>
 <meta name="description" content="Arasta B2B pazar yeri: Penpot’ta MCP ile tasarlanıp koda çevrilmiş, cihaz kümelerine göre ayrı ekranlar.">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="${base}assets/arasta.css"><link rel="icon" href="${base}assets/favicon.svg"></head><body class="hubbody"><main class="hub" id="main">${body}</main><script src="${base}assets/app.js" defer></script></body></html>`;
+<link rel="stylesheet" href="${base}assets/arasta.css?v=${VER}"><link rel="icon" href="${base}assets/favicon.svg"></head><body class="hubbody"><main class="hub" id="main">${body}</main><script src="${base}assets/app.js?v=${VER}" defer></script></body></html>`;
 Object.assign(ctx, { base: '', fam: 'desktop' });
 const pickJs = `<script>function openMine(){var w=innerWidth,h=innerHeight,l=w>h&&h<=500,m=matchMedia('(pointer:none)').matches;var t=m?'tv/4k':l?(w<600?'mobil-yatay/480x320':w<760?'mobil-yatay/667x375':w<900?'mobil-yatay/844x390':'mobil-yatay/932x430'):w<340?'mobil-dikey/320':w<368?'mobil-dikey/360':w<383?'mobil-dikey/375':w<410?'mobil-dikey/390':w<600?'mobil-dikey/430':w<960?(w<700?'tablet-dikey/600':'tablet-dikey/768'):w<1280?(h>w?'tablet-dikey/1024':'tablet-yatay/1024x768'):w<1400?'laptop/1280':w<1600?'laptop/1440':w<1800?'laptop/1728':w<2200?'masaustu/1920':w<3400?'masaustu/2560':'buyuk-ekran/3840';location.href=t+'/ana-sayfa.html'}</script>`;
 const hub = `<section class="hub-hero"><p class="over" style="color:#DDE4FF">Penpot → MCP → Frontend</p><h1>Arasta · kurumsal B2B pazar yeri</h1>

@@ -1,0 +1,10 @@
+.pg-tedarikciler .ted-split{display:grid;grid-template-columns:minmax(0,58fr) minmax(0,42fr);gap:calc(var(--gap)*1.5);align-items:start}
+.pg-tedarikciler .ted-list{display:grid;gap:var(--gap);min-width:0}.pg-tedarikciler .ted-count{font:var(--t-body);color:var(--text-secondary)}
+.pg-tedarikciler .ted-mapcard{display:grid;gap:16px;padding:20px;min-width:0}
+.pg-tedarikciler .ted-map{position:relative;aspect-ratio:10/11;border-radius:var(--r-m);background:var(--bg-brand-subtle);overflow:hidden}
+.pg-tedarikciler .ted-land{position:absolute;left:7%;top:30%;width:86%;height:42%;border-radius:var(--r-m);background:var(--bg-surface)}
+.pg-tedarikciler .ted-pin{position:absolute;display:grid;place-items:center;border-radius:var(--r-m);background:var(--action-primary);color:#fff;font:500 16px/1 var(--font);box-shadow:var(--e3)}
+.pg-tedarikciler .ted-legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px}
+.pg-tedarikciler .ted-legend a{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;padding:0 12px;border-radius:var(--r-s);background:var(--bg-subtle);color:var(--text-primary);text-decoration:none}.pg-tedarikciler .ted-legend a:hover{background:var(--bg-muted)}
+.pg-tedarikciler.pa-tv .ted-map{width:100%;aspect-ratio:auto;height:560px}.pg-tedarikciler.pa-tv .ted-pin{font:var(--t-label)}.pg-tedarikciler.pa-tv .ted-tvlist{display:grid;gap:24px}
+.pg-tedarikciler.pa-tv .ted-map{background:#1A2130}.pg-tedarikciler.pa-tv .ted-land{background:#2A3344}.pg-tedarikciler .ted-mapcard .row>.muted{display:inline-flex;align-items:center;gap:6px}

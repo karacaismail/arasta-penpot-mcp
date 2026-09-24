@@ -1,0 +1,18 @@
+.pg-magaza .mag-cover{padding:calc(var(--gap)*2) 0}.pg-magaza .mag-cover-in{display:flex;align-items:center;gap:var(--gap)}
+[data-fam=phone] .pg-magaza .mag-cover-in,[data-fam=phoneL] .pg-magaza .mag-cover-in{flex-direction:column;align-items:flex-start}
+.pg-magaza .mag-logo{display:grid;place-items:center;width:96px;height:96px;flex:none;border-radius:var(--r-m);background:var(--bg-surface);color:var(--text-brand);font:var(--t-h2);box-shadow:var(--e3)}
+[data-fam=phone] .pg-magaza .mag-logo,[data-fam=phoneL] .pg-magaza .mag-logo{width:64px;height:64px}
+.pg-magaza .mag-id{display:grid;gap:8px;flex:0 1 50%;min-width:0}[data-fam=phone] .pg-magaza .mag-id,[data-fam=phoneL] .pg-magaza .mag-id,[data-fam=tablet] .pg-magaza .mag-id{flex:1 1 auto}
+.pg-magaza .mag-id h1{color:#fff;overflow-wrap:anywhere}.pg-magaza .mag-act{margin-left:auto;display:flex;flex-wrap:wrap;gap:12px}
+[data-fam=phone] .pg-magaza .mag-act,[data-fam=phoneL] .pg-magaza .mag-act{margin-left:0}[data-fam=tablet] .pg-magaza .mag-act{flex-direction:column}
+.pg-magaza .mag-stats{padding-top:calc(var(--gap)*1.5);padding-bottom:0}.pg-magaza .mag-statgrid{grid-template-columns:repeat(4,minmax(0,1fr))}
+[data-fam=phone] .pg-magaza .mag-statgrid,[data-fam=phoneL] .pg-magaza .mag-statgrid{grid-template-columns:repeat(2,minmax(0,1fr))}[data-screen="320"] .pg-magaza .mag-statgrid{grid-template-columns:1fr}
+.pg-magaza .mag-stat{display:flex;gap:12px;align-items:center;padding:16px;min-width:0}.pg-magaza .mag-stat p{display:grid;min-width:0}.pg-magaza .mag-stat b{font:var(--t-h3)}.pg-magaza .mag-stat span{color:var(--text-tertiary)}
+[data-fam=phone] .pg-magaza .mag-stat .icon-tile{width:44px;height:44px}
+.pg-magaza .mag-split{display:grid;grid-template-columns:minmax(0,36fr) minmax(0,64fr);gap:calc(var(--gap)*1.5);align-items:start}.pg-magaza .mag-stack{display:grid;gap:calc(var(--gap)*1.5)}
+.pg-magaza .mag-tl{display:grid;gap:12px;padding:24px}[data-fam=phone] .pg-magaza .mag-tl{padding:16px}.pg-magaza .mag-prods{min-width:0}
+.pg-magaza.pa-tv .mag-tvid{display:flex;align-items:center;gap:32px;padding-top:16px;padding-bottom:24px}.pg-magaza.pa-tv .mag-tvlogo{width:112px;height:112px;font:var(--t-h2)}.pg-magaza.pa-tv .mag-tvid>div{display:grid;gap:8px}
+[data-fam=tablet] .pg-magaza .mag-statgrid{grid-template-columns:repeat(2,minmax(0,1fr))}[data-screen="1024"] .pg-magaza .mag-statgrid{grid-template-columns:repeat(4,minmax(0,1fr))}
+/* small tablet: actions move below identity instead of squeezing into a narrow column */
+[data-fam=tablet] .pg-magaza .mag-cover-in{flex-wrap:wrap}[data-fam=tablet] .pg-magaza .mag-id{flex:1 1 300px;min-width:0}
+[data-fam=tablet] .pg-magaza .mag-act{flex-direction:row;flex:1 1 100%;margin-left:0}

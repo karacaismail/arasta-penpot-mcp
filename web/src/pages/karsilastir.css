@@ -1,0 +1,15 @@
+.pg-karsilastir .kar-cards{display:grid;gap:var(--gap)}.pg-karsilastir .kar-card{display:grid;gap:12px;padding:16px}[data-fam=tablet] .pg-karsilastir .kar-card{padding:24px}
+.pg-karsilastir .kar-card.is-best{border-color:var(--border-brand);box-shadow:var(--e1),inset 0 0 0 1px var(--border-brand)}
+.pg-karsilastir .kar-card-h{display:flex;gap:12px;align-items:center}.pg-karsilastir .kar-card-h>div{display:grid}.pg-karsilastir .kar-name{font:var(--t-label)}.pg-karsilastir .kar-card .badge{justify-self:start}
+.pg-karsilastir .kar-card dl{display:grid;gap:8px}.pg-karsilastir .kar-card dl>div{display:flex;justify-content:space-between;gap:8px}.pg-karsilastir .kar-card dt{color:var(--text-tertiary)}.pg-karsilastir .kar-card dd{font:var(--t-label);text-align:right}
+.pg-karsilastir .kar-wrap{overflow-x:auto;padding:0}.pg-karsilastir .kar-table{width:100%;border-collapse:collapse}
+.pg-karsilastir .kar-table th,.pg-karsilastir .kar-table td{padding:14px 20px;text-align:left;vertical-align:top}.pg-karsilastir .kar-k{width:22%}
+.pg-karsilastir .kar-table thead th{padding:20px;font-weight:400;border-bottom:1px solid var(--border-subtle)}.pg-karsilastir .kar-table thead td{border-bottom:1px solid var(--border-subtle)}
+.pg-karsilastir .kar-th{display:grid;gap:10px;justify-items:start}.pg-karsilastir .kar-th .icon-tile{width:56px;height:56px}.pg-karsilastir .kar-price{font:var(--t-price)}
+.pg-karsilastir .kar-table tbody tr:nth-child(odd){background:var(--bg-subtle)}.pg-karsilastir .kar-table tbody th{font:var(--t-label)}
+.pg-karsilastir .kar-table .is-best{background:var(--bg-brand-subtle)}.pg-karsilastir .kar-table td .ic{display:inline-block;vertical-align:-2px;margin-right:6px}
+.pg-karsilastir.pa-tv .kar-tvtable{width:100%;border-collapse:separate;border-spacing:0 8px}.pg-karsilastir.pa-tv .kar-tvtable th,.pg-karsilastir.pa-tv .kar-tvtable td{padding:12px 24px;text-align:left}
+.pg-karsilastir.pa-tv .kar-tvtable thead th{font:var(--t-label);color:#fff}.pg-karsilastir.pa-tv .kar-tvtable thead th .icon-tile{display:grid;width:64px;height:64px;margin-bottom:12px}
+.pg-karsilastir.pa-tv .kar-tvtable tbody th{width:420px;font:var(--t-label);color:#C3CAD6}.pg-karsilastir.pa-tv .kar-tvtable tbody td{font:var(--t-h3);color:#fff}
+.pg-karsilastir.pa-tv .kar-tvtable tr.is-focus>*{background:#1E2533}.pg-karsilastir.pa-tv .kar-tvtable tr.is-focus>:first-child{border-radius:var(--r-m) 0 0 var(--r-m)}.pg-karsilastir.pa-tv .kar-tvtable tr.is-focus>:last-child{border-radius:0 var(--r-m) var(--r-m) 0}
+.pg-karsilastir.pa-tv .kar-tvtable td.is-best{color:#BCC9FF}
