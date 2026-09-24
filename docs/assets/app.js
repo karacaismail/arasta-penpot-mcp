@@ -2,6 +2,8 @@
 (() => {
   const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const root = document.documentElement;
+  const EMBED = window.self !== window.top || /[?&]embed=1/.test(location.search);
+  if (EMBED) document.body.classList.add('embed');
   try { const t = localStorage.getItem('arasta-theme'); if (t) root.dataset.theme = t; } catch (e) {}
   // stepper
   document.addEventListener('click', (e) => {
@@ -31,7 +33,7 @@
   // device bar: theme + fit
   $('#dv-theme')?.addEventListener('click', () => { const dark = (root.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) !== 'dark'; root.dataset.theme = dark ? 'dark' : 'light'; try { localStorage.setItem('arasta-theme', root.dataset.theme); } catch (e) {} });
   const stage = $('#stage'), app = $('.app'), fitBtn = $('#dv-zoom');
-  function fit() { if (!stage?.dataset.w) return; const w = +stage.dataset.w; const avail = stage.clientWidth - 32; const auto = w > avail; const on = fitBtn?.getAttribute('aria-pressed') === 'true' || (auto && fitBtn?.dataset.user !== '1');
+  function fit() { if (!stage?.dataset.w || EMBED) return; const w = +stage.dataset.w; const avail = stage.clientWidth - 32; const auto = w > avail; const on = fitBtn?.getAttribute('aria-pressed') === 'true' || (auto && fitBtn?.dataset.user !== '1');
     if (on && w > avail) { const k = avail / w; app.style.transform = `scale(${k})`; stage.classList.add('fit'); stage.style.height = app.offsetHeight * k + 64 + 'px'; fitBtn && (fitBtn.textContent = '%100', fitBtn.setAttribute('aria-pressed', 'true')); }
     else { app.style.transform = ''; stage.classList.remove('fit'); stage.style.height = ''; fitBtn && (fitBtn.textContent = 'Sığdır', fitBtn.setAttribute('aria-pressed', 'false')); } }
   fitBtn?.addEventListener('click', () => { fitBtn.dataset.user = '1'; fitBtn.setAttribute('aria-pressed', fitBtn.getAttribute('aria-pressed') === 'true' ? 'false' : 'true'); fit(); });

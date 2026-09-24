@@ -3,6 +3,7 @@ import fs from 'node:fs'; import path from 'node:path'; import { pathToFileURL }
 import { CLUSTERS, SCREENS, PAGES } from './src/devices.mjs';
 import { ctx, USED, ic, esc, section, emptyState } from './src/lib/html.mjs';
 import { doc } from './src/lib/shell.mjs';
+import { viewer } from './src/viewer.mjs';
 const W = path.dirname(new URL(import.meta.url).pathname); const OUT = path.resolve(process.env.OUT || path.resolve(W, '../docs'));
 const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
 const write = (f, s) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, s); };
@@ -37,7 +38,8 @@ const hub = `<section class="hub-hero"><p class="over" style="color:#DDE4FF">Pen
 <div class="row gap12 wrap" style="margin-top:20px"><button class="btn btn-onDark" onclick="openMine()">${ic('device-mobile')}<span>Cihazıma uygun ekranı aç</span></button><a class="btn btn-tertiary" href="rapor/index.html">${ic('chart-bar')}<span>Penpot × MCP raporu</span></a><a class="btn btn-tertiary" href="https://github.com/karacaismail/arasta-penpot-mcp">${ic('github-logo')}<span>Kaynak kod</span></a></div></section>
 ${CLUSTERS.map((c) => `<section class="hub-cluster card" aria-labelledby="c-${c.slug}"><div class="row gap12">${ic(c.icon, { duo: true, s: 32 })}<div><h2 id="c-${c.slug}"><a href="${c.slug}/index.html" style="color:inherit;text-decoration:none">${esc(c.title)}</a></h2><p class="muted">${esc(c.desc)}</p></div></div>
 <div class="hub-screens">${c.screens.map((s) => `<a class="hub-screen" href="${c.slug}/${s.id}/index.html"><b>${esc(s.id.includes('x') ? s.id.replace('x', ' × ') : s.id + ' px')}</b><span class="muted">${esc(s.label)}</span>${s.note ? `<span class="muted small">${esc(s.note)}</span>` : ''}</a>`).join('')}</div></section>`).join('')}${pickJs}`;
-write(path.join(OUT, 'index.html'), shellDoc('', 'Arasta · Ekranlar', hub));
+write(path.join(OUT, 'index.html'), viewer(VER));
+write(path.join(OUT, 'ekranlar.html'), shellDoc('', 'Arasta · Ekranlar', hub));
 for (const c of CLUSTERS) {
   Object.assign(ctx, { base: '../' });
   write(path.join(OUT, c.slug, 'index.html'), shellDoc('../', `${c.title} · Arasta`, `<nav class="crumbs" aria-label="Sayfa yolu"><ol><li><a href="../index.html">Tüm ekranlar</a></li><li><span aria-current="page">${esc(c.title)}</span></li></ol></nav>

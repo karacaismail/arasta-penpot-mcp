@@ -223,6 +223,8 @@ body.hubbody{background:var(--bg-canvas)}
 [data-fam=tablet] .ftr-cols{grid-template-columns:repeat(2,minmax(0,1fr))}[data-fam=tablet] .ftr-cols>div:first-child{grid-column:1/-1}
 .scard,.ecard-body,.pcard-body,.feature,.stat{grid-template-columns:minmax(0,1fr)}
 .row:has(> .btn + .btn),.row:has(> .btn + .icon-btn){flex-wrap:wrap}.row > .btn.grow{flex:1 1 140px}
+/* embedded in the root viewer: device content only */
+body.embed{background:var(--bg-canvas)}.embed .devbar{display:none}.embed.screen .stage{padding:0;overflow:visible}.embed.screen .app{box-shadow:none;border-radius:0}
 
 /* ===== shared page grids (columns per device family = Penpot frames) ===== */
 .g-products{grid-template-columns:repeat(2,minmax(0,1fr))}[data-screen="320"] .g-products{grid-template-columns:1fr}
