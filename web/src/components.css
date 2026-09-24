@@ -176,3 +176,4 @@ body.hubbody{background:var(--bg-canvas)}
 .card,.aisearch,.qrow,.toast-static{color:var(--text-primary)}
 .sec.brand .card .muted,.sec.inverse .card .muted,.sec.brand .aisearch .muted,.sec.inverse .card .over{color:var(--text-secondary)}
 .sec.inverse .card .over{color:var(--text-brand)}
+.ftr .container{grid-template-columns:minmax(0,1fr)}.ftr-news>*{min-width:0}.ftr-news input{width:100%}
