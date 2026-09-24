@@ -1,0 +1,37 @@
+/* Arasta v2 design tokens — 1:1 from the Penpot library (colors, typography, radius, elevation, device sets) */
+:root{
+  --bg-canvas:#F4F6FA;--bg-surface:#FFFFFF;--bg-subtle:#FAFBFC;--bg-muted:#EBEEF3;--bg-inverse:#111623;--bg-inverse-2:#1E2533;
+  --bg-brand:#2446D8;--bg-brand-subtle:#EEF2FF;--bg-brand-subtle-2:#DDE4FF;--bg-ai-subtle:#F3F0FF;--bg-success-subtle:#ECFDF3;--bg-warning-subtle:#FFF6E5;--bg-danger-subtle:#FEF0EF;--bg-highlight:#FDB022;
+  --text-primary:#111623;--text-secondary:#4B5567;--text-tertiary:#647084;--text-on-brand:#FFFFFF;--text-brand:#2446D8;--text-link:#1B36B0;--text-ai:#5B3CD6;--text-success:#067647;--text-warning:#B54708;--text-danger:#B42318;--text-inverse:#FFFFFF;--text-inverse-muted:#C3CAD6;
+  --border-subtle:#DCE1E9;--border-default:#7D879A;--border-strong:#343D4E;--border-brand:#2446D8;--border-danger:#D92D20;
+  --action-primary:#2446D8;--action-primary-hover:#1B36B0;--action-primary-pressed:#16298A;--action-danger:#D92D20;--action-disabled-bg:#EBEEF3;--action-disabled-text:#8D96A8;
+  --focus-ring:#2446D8;--focus-ring-on-dark:#BCC9FF;--accent-violet:#7A5AF8;--accent-saffron:#FDB022;--accent-coral:#D92D20;--accent-green:#12B76A;
+  --grad-brand:linear-gradient(135deg,#2446D8 0%,#7A5AF8 100%);
+  --r-xs:4px;--r-s:8px;--r-m:12px; /* radius cap: 12px */
+  --e1:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.10);
+  --e2:0 2px 4px -2px rgba(16,24,40,.06),0 4px 8px -2px rgba(16,24,40,.10);
+  --e3:0 4px 6px -2px rgba(16,24,40,.05),0 12px 16px -4px rgba(16,24,40,.10);
+  --e4:0 8px 8px -4px rgba(16,24,40,.04),0 20px 24px -4px rgba(16,24,40,.10);
+  --e5:0 24px 48px -12px rgba(16,24,40,.18);
+  --glow:0 1px 2px rgba(36,70,216,.2),0 6px 16px -4px rgba(36,70,216,.35);
+  --font:"Roboto",system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"Roboto Mono",ui-monospace,monospace;
+  /* device set: phone (default) */
+  --gutter:16px;--gap:12px;--tgt:44px;--maxw:100%;
+  --t-hero:600 36px/44px var(--font);--t-hero-ls:-.5px;--t-h2:600 24px/32px var(--font);--t-h3:600 18px/26px var(--font);
+  --t-body:400 16px/24px var(--font);--t-lead:400 16px/24px var(--font);--t-label:500 16px/20px var(--font);--t-price:700 20px/28px var(--font);
+  --t-over:600 16px/20px var(--font);
+  color-scheme:light;
+}
+/* device families (adaptive): set on <html data-fam="…"> by the page (fixed screens) or by app.js (live) */
+[data-fam=phoneL]{--gutter:24px;--t-hero:600 28px/36px var(--font)}
+[data-fam=tablet],[data-fam=tabletL]{--gutter:32px;--gap:16px;--t-hero:700 44px/52px var(--font);--t-h2:600 28px/36px var(--font);--t-h3:600 20px/28px var(--font);--t-lead:400 18px/28px var(--font)}
+[data-fam=desktop]{--gutter:40px;--gap:24px;--maxw:1760px;--t-hero:700 56px/64px var(--font);--t-hero-ls:-1px;--t-h2:600 36px/44px var(--font);--t-h3:600 24px/32px var(--font);--t-lead:400 18px/28px var(--font);--t-price:700 24px/32px var(--font)}
+[data-fam=wide]{--gutter:64px;--gap:32px;--tgt:48px;--maxw:2240px;--t-hero:700 72px/80px var(--font);--t-hero-ls:-1.5px;--t-h2:700 44px/52px var(--font);--t-h3:600 28px/36px var(--font);--t-body:400 18px/28px var(--font);--t-lead:400 20px/32px var(--font);--t-label:500 18px/24px var(--font);--t-price:700 24px/32px var(--font)}
+[data-fam=ultra]{--gutter:96px;--gap:40px;--tgt:56px;--maxw:3200px;--t-hero:700 88px/96px var(--font);--t-hero-ls:-2px;--t-h2:700 56px/64px var(--font);--t-h3:600 36px/44px var(--font);--t-body:400 20px/32px var(--font);--t-lead:400 20px/32px var(--font);--t-label:500 20px/28px var(--font);--t-price:700 24px/32px var(--font)}
+/* dark theme = Penpot token set arasta/semantic/dark */
+:root[data-theme=dark]{--bg-canvas:#0B0F19;--bg-surface:#151B28;--bg-subtle:#1A2130;--bg-muted:#232B3B;--bg-brand-subtle:#1B2447;--bg-brand-subtle-2:#26306A;--bg-ai-subtle:#241C45;--bg-success-subtle:#0F2A1E;--bg-warning-subtle:#2E2210;--bg-danger-subtle:#34171A;
+  --text-primary:#F4F6FA;--text-secondary:#C3CAD6;--text-tertiary:#9AA3B5;--text-brand:#8FA5FF;--text-link:#BCC9FF;--text-ai:#B7A6FF;--text-success:#4ADE95;--text-warning:#FDB022;--text-danger:#FF8F85;
+  --border-subtle:#2A3344;--border-default:#8D96A8;--border-brand:#8FA5FF;--focus-ring:#BCC9FF;--action-disabled-bg:#232B3B;color-scheme:dark}
+/* TV 10-foot mode (auto on pointer:none devices or ?tv=1) */
+[data-fam=tv]{--gutter:96px;--gap:32px;--tgt:64px;--maxw:100%;--t-hero:700 80px/88px var(--font);--t-h2:600 48px/56px var(--font);--t-h3:600 32px/40px var(--font);--t-body:400 28px/40px var(--font);--t-lead:400 28px/40px var(--font);--t-label:500 24px/32px var(--font);--t-price:600 32px/40px var(--font);--t-over:600 24px/32px var(--font);
+  --bg-canvas:#111623;--bg-surface:#1E2533;--bg-subtle:#1A2130;--bg-muted:#2A3344;--text-primary:#FFFFFF;--text-secondary:#C3CAD6;--text-tertiary:#AEB6C6;--focus-ring:#BCC9FF;--border-subtle:#2A3344;color-scheme:dark}

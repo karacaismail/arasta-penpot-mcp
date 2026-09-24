@@ -3,3 +3,4 @@ state/
 .mcp-url
 *.log
 .DS_Store
+web/node_modules/
